@@ -1,0 +1,12 @@
+{
+    "functions": {
+        "app/api/crawl/route.ts": {
+            "maxDuration": 300,
+            "memory": 3008
+        },
+        "app/api/blog-search/route.ts": {
+            "maxDuration": 300,
+            "memory": 3008
+        }
+    }
+}
