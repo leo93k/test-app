@@ -14,9 +14,9 @@ export default function Navigation() {
         },
         {
             href: "/crawler",
-            name: "웹 크롤러",
+            name: "서로이웃 추가",
             icon: "🕷️",
-            description: "서로이웃 추가",
+            description: "네이버 블로그 서로이웃 추가",
         },
         {
             href: "/analytics",
