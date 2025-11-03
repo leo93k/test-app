@@ -1,0 +1,473 @@
+"use client";
+import { useState } from "react";
+import { Logger } from "@/lib/logger";
+import type { BlogSearchResult } from "./types";
+
+interface FriendRequestSectionProps {
+    username: string;
+    password: string;
+    headless: boolean;
+    friendRequestTargets: BlogSearchResult[];
+    searchResults: BlogSearchResult[];
+    onUsernameChange: (username: string) => void;
+    onPasswordChange: (password: string) => void;
+    onHeadlessChange: (headless: boolean) => void;
+    onTargetsChange: (targets: BlogSearchResult[]) => void;
+    onError: (error: string) => void;
+    onLoadingChange: (loading: boolean) => void;
+}
+
+const messageSamples = {
+    sample1: "안녕하세요! 좋은 글 잘 보고 있습니다. 서로이웃 신청드려요! 😊",
+    sample2: "블로그 글 정말 유익하네요! 서로이웃으로 소통해요~",
+    sample3: "관심있는 주제의 글을 많이 보고 있어요. 서로이웃 신청합니다!",
+    sample4:
+        "좋은 정보 공유 감사합니다. 서로이웃으로 지속적인 소통 부탁드려요!",
+    sample5: "블로그 운영 화이팅! 서로이웃 신청드립니다. 함께 성장해요! 🚀",
+};
+
+export default function FriendRequestSection({
+    username,
+    password,
+    headless,
+    friendRequestTargets,
+    searchResults,
+    onUsernameChange,
+    onPasswordChange,
+    onHeadlessChange,
+    onTargetsChange,
+    onError,
+    onLoadingChange,
+}: FriendRequestSectionProps) {
+    const [selectedMessageType, setSelectedMessageType] = useState("sample1");
+    const [friendRequestMessage, setFriendRequestMessage] = useState(
+        messageSamples.sample1
+    );
+    const [friendRequestLoading, setFriendRequestLoading] = useState(false);
+
+    const handleMessageTypeChange = (type: string) => {
+        setSelectedMessageType(type);
+        if (type === "custom") {
+            setFriendRequestMessage("");
+        } else {
+            setFriendRequestMessage(
+                messageSamples[type as keyof typeof messageSamples]
+            );
+        }
+    };
+
+    const handleFriendRequest = async () => {
+        if (!username.trim() || !password.trim()) {
+            onError("아이디와 비밀번호를 모두 입력해주세요.");
+            return;
+        }
+
+        if (friendRequestTargets.length === 0) {
+            onError("먼저 블로그를 검색하고 서이추 목록에 추가해주세요.");
+            return;
+        }
+
+        setFriendRequestLoading(true);
+        onLoadingChange(true);
+        onError("");
+
+        try {
+            const logger = Logger.getInstance("friend-request");
+            await logger.info(
+                `🤝 ${friendRequestTargets.length}개 블로그에 서로이웃 추가 요청을 시작합니다...`
+            );
+
+            const promises = friendRequestTargets.map(async (blog, index) => {
+                try {
+                    await logger.info(
+                        `📝 블로그 ${index + 1} 처리 시작: ${blog.title}`
+                    );
+
+                    const response = await fetch("/api/crawl", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            url: blog.url,
+                            username: username.trim(),
+                            password: password.trim(),
+                            message: friendRequestMessage.trim(),
+                            headless: headless,
+                            friendRequest: true,
+                        }),
+                    });
+
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(
+                            data.error || "서로이웃 추가 요청에 실패했습니다."
+                        );
+                    }
+
+                    await logger.success(
+                        `✅ 블로그 ${index + 1} 서로이웃 추가 완료: ${
+                            blog.title
+                        }`
+                    );
+                    return { success: true, blog, index };
+                } catch (error) {
+                    const errorMessage =
+                        error instanceof Error
+                            ? error.message
+                            : "알 수 없는 오류";
+                    await logger.error(
+                        `❌ 블로그 ${
+                            index + 1
+                        } 서로이웃 추가 실패: ${errorMessage}`
+                    );
+                    return { success: false, blog, index, error: errorMessage };
+                }
+            });
+
+            const results = await Promise.allSettled(promises);
+            const successCount = results.filter(
+                (r) => r.status === "fulfilled" && r.value.success
+            ).length;
+            const failCount = results.length - successCount;
+
+            await logger.success(
+                `🎉 서로이웃 추가 완료! 성공: ${successCount}개, 실패: ${failCount}개`
+            );
+        } catch (err) {
+            const errorMessage =
+                err instanceof Error
+                    ? err.message
+                    : "알 수 없는 오류가 발생했습니다.";
+            onError(errorMessage);
+
+            const logger = Logger.getInstance("friend-request");
+            await logger.error(`❌ 서로이웃 추가 실패: ${errorMessage}`);
+        } finally {
+            setFriendRequestLoading(false);
+            onLoadingChange(false);
+        }
+    };
+
+    return (
+        <div className="max-w-4xl mx-auto mb-8">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                <h3 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
+                    🤝 서로이웃 추가
+                </h3>
+                <p className="text-gray-600 dark:text-gray-300 mb-6">
+                    네이버 블로그에서 서로이웃 추가 요청을 보낼 수 있습니다.
+                    먼저 위에서 블로그를 검색하고 선택한 후, 로그인 정보를
+                    입력하여 서로이웃 추가를 진행하세요.
+                </p>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* 왼쪽: 로그인 정보 및 설정 */}
+                    <div className="space-y-4">
+                        <h4 className="text-lg font-medium text-gray-700 dark:text-gray-300">
+                            🔐 로그인 정보
+                        </h4>
+
+                        <form className="space-y-3">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                    네이버 아이디
+                                </label>
+                                <input
+                                    type="text"
+                                    name="username"
+                                    value={username}
+                                    onChange={(e) =>
+                                        onUsernameChange(e.target.value)
+                                    }
+                                    placeholder="네이버 아이디를 입력하세요"
+                                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                                    disabled={friendRequestLoading}
+                                    autoComplete="username"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                    네이버 비밀번호
+                                </label>
+                                <input
+                                    type="password"
+                                    name="password"
+                                    value={password}
+                                    onChange={(e) =>
+                                        onPasswordChange(e.target.value)
+                                    }
+                                    placeholder="네이버 비밀번호를 입력하세요"
+                                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                                    disabled={friendRequestLoading}
+                                    autoComplete="current-password"
+                                />
+                            </div>
+                        </form>
+
+                        {/* 실행 모드 설정 */}
+                        <div className="pt-2">
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                실행 모드
+                            </label>
+                            <div className="flex gap-2">
+                                <label className="flex-1 flex items-center space-x-2 p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
+                                    <input
+                                        type="radio"
+                                        name="headless"
+                                        value="false"
+                                        checked={!headless}
+                                        onChange={() => onHeadlessChange(false)}
+                                        disabled={friendRequestLoading}
+                                        className="text-blue-600 focus:ring-blue-500"
+                                    />
+                                    <span className="text-sm text-gray-700 dark:text-gray-300">
+                                        👁️ 브라우저 표시
+                                    </span>
+                                </label>
+                                <label className="flex-1 flex items-center space-x-2 p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
+                                    <input
+                                        type="radio"
+                                        name="headless"
+                                        value="true"
+                                        checked={headless}
+                                        onChange={() => onHeadlessChange(true)}
+                                        disabled={friendRequestLoading}
+                                        className="text-blue-600 focus:ring-blue-500"
+                                    />
+                                    <span className="text-sm text-gray-700 dark:text-gray-300">
+                                        🚫 백그라운드 실행
+                                    </span>
+                                </label>
+                            </div>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                브라우저 표시: 실행 과정을 화면에서 확인할 수
+                                있습니다
+                            </p>
+                        </div>
+
+                        {/* 서로이웃 추가 메시지 */}
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                서로이웃 추가 메시지
+                            </label>
+
+                            <select
+                                value={selectedMessageType}
+                                onChange={(e) =>
+                                    handleMessageTypeChange(e.target.value)
+                                }
+                                disabled={friendRequestLoading}
+                                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white mb-3"
+                            >
+                                {Object.entries(messageSamples).map(
+                                    ([key, message], index) => (
+                                        <option key={key} value={key}>
+                                            샘플 {index + 1}:{" "}
+                                            {message.length > 30
+                                                ? message.substring(0, 30) +
+                                                  "..."
+                                                : message}
+                                        </option>
+                                    )
+                                )}
+                                <option value="custom">기타 (직접 입력)</option>
+                            </select>
+
+                            {selectedMessageType === "custom" ? (
+                                <textarea
+                                    value={friendRequestMessage}
+                                    onChange={(e) =>
+                                        setFriendRequestMessage(e.target.value)
+                                    }
+                                    placeholder="서로이웃 추가 요청 시 보낼 메시지를 입력하세요"
+                                    rows={3}
+                                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white resize-none"
+                                    disabled={friendRequestLoading}
+                                />
+                            ) : (
+                                <div className="p-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
+                                    <div className="text-sm text-gray-800 dark:text-white">
+                                        {friendRequestMessage}
+                                    </div>
+                                </div>
+                            )}
+
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                선택한 메시지가 모든 블로그에 전송됩니다.
+                            </p>
+                        </div>
+
+                        {/* 서로이웃 추가 버튼 */}
+                        <div className="pt-4">
+                            <button
+                                onClick={handleFriendRequest}
+                                disabled={
+                                    friendRequestLoading ||
+                                    friendRequestTargets.length === 0 ||
+                                    !username.trim() ||
+                                    !password.trim()
+                                }
+                                className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-lg font-medium transition-colors"
+                            >
+                                {friendRequestLoading
+                                    ? "서로이웃 추가 중..."
+                                    : "🤝 서로이웃 추가 요청"}
+                            </button>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
+                                {friendRequestTargets.length === 0
+                                    ? "먼저 블로그를 검색하고 추가해주세요"
+                                    : !username.trim() || !password.trim()
+                                    ? "로그인 정보를 입력해주세요"
+                                    : `${friendRequestTargets.length}개 블로그에 서로이웃 추가 요청을 보낼 준비가 되었습니다`}
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* 오른쪽: 대상 블로그 목록 및 상태 */}
+                    <div className="space-y-4">
+                        <h4 className="text-lg font-medium text-gray-700 dark:text-gray-300">
+                            📋 서이추 블로그 목록
+                        </h4>
+
+                        {friendRequestTargets.length > 0 ? (
+                            <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+                                <div className="mb-3">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                            총 {friendRequestTargets.length}개
+                                            블로그
+                                        </span>
+                                        <span className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-1 rounded text-xs">
+                                            서로이웃 추가 대상
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="max-h-64 overflow-y-auto space-y-2">
+                                    {friendRequestTargets.map((blog, index) => (
+                                        <div
+                                            key={index}
+                                            className="flex items-center space-x-3 p-2 bg-white dark:bg-gray-600 rounded border group relative"
+                                        >
+                                            <button
+                                                onClick={() => {
+                                                    onTargetsChange(
+                                                        friendRequestTargets.filter(
+                                                            (_, i) =>
+                                                                i !== index
+                                                        )
+                                                    );
+                                                }}
+                                                className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-red-500 hover:bg-red-600 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center"
+                                                title="제거"
+                                            >
+                                                ✕
+                                            </button>
+                                            <div className="flex-shrink-0">
+                                                <div className="w-8 h-8 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
+                                                    <span className="text-blue-600 dark:text-blue-400 text-xs">
+                                                        {index + 1}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <h6 className="text-xs font-medium text-gray-800 dark:text-white truncate">
+                                                    {blog.title || "제목 없음"}
+                                                </h6>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                                    👤{" "}
+                                                    {blog.author ||
+                                                        "작성자 미상"}
+                                                </p>
+                                            </div>
+                                            <div className="flex-shrink-0">
+                                                <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 px-2 py-1 rounded">
+                                                    대기
+                                                </span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                                    <div className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                                        위의 모든 블로그에 서로이웃 추가 요청을
+                                        보냅니다
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-8 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 text-center">
+                                <div className="text-4xl text-gray-400 mb-2">
+                                    🔍
+                                </div>
+                                <p className="text-gray-500 dark:text-gray-400 text-sm">
+                                    먼저 위에서 블로그를 검색해주세요
+                                </p>
+                            </div>
+                        )}
+
+                        {/* 진행 상태 */}
+                        <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                            <h5 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">
+                                📊 진행 상태
+                            </h5>
+                            <div className="space-y-2 text-xs">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-blue-700 dark:text-blue-300">
+                                        블로그 검색
+                                    </span>
+                                    <span
+                                        className={`px-2 py-1 rounded ${
+                                            searchResults.length > 0
+                                                ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
+                                                : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
+                                        }`}
+                                    >
+                                        {searchResults.length > 0
+                                            ? `${searchResults.length}개 완료`
+                                            : "대기"}
+                                    </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <span className="text-blue-700 dark:text-blue-300">
+                                        로그인 정보
+                                    </span>
+                                    <span
+                                        className={`px-2 py-1 rounded ${
+                                            username.trim() && password.trim()
+                                                ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
+                                                : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
+                                        }`}
+                                    >
+                                        {username.trim() && password.trim()
+                                            ? "완료"
+                                            : "대기"}
+                                    </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <span className="text-blue-700 dark:text-blue-300">
+                                        서로이웃 추가 대상
+                                    </span>
+                                    <span
+                                        className={`px-2 py-1 rounded ${
+                                            friendRequestTargets.length > 0
+                                                ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
+                                                : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
+                                        }`}
+                                    >
+                                        {friendRequestTargets.length > 0
+                                            ? `${friendRequestTargets.length}개`
+                                            : "대기"}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
