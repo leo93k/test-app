@@ -641,6 +641,41 @@ export async function executeFriendRequestProcess(
     // 팝업 페이지 가져오기
     const popupPage = getPopupPage(page, logger);
 
+    // 팝업 내용 확인: "이미 이웃입니다" 메시지 체크
+    try {
+        await popupPage.waitForTimeout(500); // 팝업 내용 로드 대기
+        const popupContent = await popupPage.evaluate(() => {
+            const bodyText = document.body?.textContent || "";
+            const alertText =
+                document.querySelector(".alert")?.textContent || "";
+            const alertMessageText =
+                document.querySelector(".alert-message")?.textContent || "";
+            return bodyText + " " + alertText + " " + alertMessageText;
+        });
+
+        await logger.info(
+            `📋 팝업 내용 확인: ${popupContent.substring(0, 200)}...`
+        );
+
+        // "이미 이웃입니다" 관련 메시지 확인
+        if (
+            popupContent.includes("이미 이웃입니다") ||
+            popupContent.includes("이미 이웃") ||
+            popupContent.includes("이미 서로이웃") ||
+            popupContent.includes("이미 서로이웃입니다") ||
+            popupContent.includes("이웃 상태입니다")
+        ) {
+            await logger.info("ℹ️ 팝업에서 '이미 이웃입니다' 메시지 발견");
+            await logger.success(
+                "✅ 이미 이웃 상태입니다. 서로이웃 추가 프로세스를 종료합니다."
+            );
+            return "already-friend";
+        }
+    } catch {
+        // 팝업 내용 확인 실패는 무시하고 계속 진행
+        await logger.info("ℹ️ 팝업 내용 확인 중 오류 발생, 계속 진행합니다.");
+    }
+
     // 라디오 버튼 클릭
     await clickRadioButton(popupPage, logger);
 
