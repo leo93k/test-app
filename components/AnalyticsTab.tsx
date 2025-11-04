@@ -1,9 +1,9 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { browserQueue } from "@/lib/browserQueue";
-import { Logger } from "@/lib/logger";
+import { Logger } from "@/service/logger";
 import { useAppSelector, useAppDispatch } from "@/lib/hooks";
-import { clearLogs } from "@/lib/slices/logsSlice";
+import { clearLogs } from "@/lib/store/logsSlice";
 import dayjs from "dayjs";
 import "dayjs/locale/ko";
 import dynamic from "next/dynamic";

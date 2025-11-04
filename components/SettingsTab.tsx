@@ -12,7 +12,7 @@ import {
     setRefreshInterval,
     resetSettings,
     loadSettings,
-} from "@/lib/slices/settingsSlice";
+} from "@/lib/store/settingsSlice";
 import dayjs from "dayjs";
 import "dayjs/locale/ko";
 import dynamic from "next/dynamic";

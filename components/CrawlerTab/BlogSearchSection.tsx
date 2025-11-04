@@ -25,7 +25,7 @@ export default function BlogSearchSection({
     };
 
     return (
-        <div className="max-w-4xl mx-auto mb-8">
+        <div>
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
                 <h3 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
                     🔍 블로그 검색

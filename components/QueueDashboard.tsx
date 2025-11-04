@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { browserQueue } from "@/lib/browserQueue";
 import { useAppSelector, useAppDispatch } from "@/lib/hooks";
-import { clearLogs } from "@/lib/slices/logsSlice";
+import { clearLogs } from "@/lib/store/logsSlice";
 import dayjs from "dayjs";
 import "dayjs/locale/ko";
 
