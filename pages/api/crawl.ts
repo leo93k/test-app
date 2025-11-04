@@ -1,10 +1,10 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { Server as HTTPServer } from "http";
 import { chromium } from "playwright";
-import { AutoLoginService } from "@/lib/loginService";
+import { AutoLoginService } from "@/service/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
-import { executeFriendRequestProcess } from "@/lib/crawler/friendRequestFlow";
+import { executeFriendRequestProcess } from "@/service/crawler/friendRequestFlow";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
