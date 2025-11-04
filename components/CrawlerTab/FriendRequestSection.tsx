@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import { Logger } from "@/lib/logger";
+import { useState, useRef } from "react";
+import { Logger } from "@/service/logger";
 import type { BlogSearchResult } from "./types";
 
 interface FriendRequestSectionProps {
@@ -26,6 +26,8 @@ const messageSamples = {
     sample5: "블로그 운영 화이팅! 서로이웃 신청드립니다. 함께 성장해요! 🚀",
 };
 
+const isProduction = process.env.NODE_ENV === "production";
+
 export default function FriendRequestSection({
     username,
     password,
@@ -39,11 +41,23 @@ export default function FriendRequestSection({
     onError,
     onLoadingChange,
 }: FriendRequestSectionProps) {
+    // 프로덕션 환경에서는 headless를 true로 고정
+    const effectiveHeadless = isProduction ? true : headless;
     const [selectedMessageType, setSelectedMessageType] = useState("sample1");
     const [friendRequestMessage, setFriendRequestMessage] = useState(
         messageSamples.sample1
     );
     const [friendRequestLoading, setFriendRequestLoading] = useState(false);
+    const [loginTestLoading, setLoginTestLoading] = useState(false);
+    const abortControllerRef = useRef<AbortController | null>(null);
+    const ongoingRequestsRef = useRef<
+        Promise<{
+            success: boolean;
+            blog: BlogSearchResult;
+            index: number;
+            error?: string;
+        }>[]
+    >([]);
 
     const handleMessageTypeChange = (type: string) => {
         setSelectedMessageType(type);
@@ -53,6 +67,91 @@ export default function FriendRequestSection({
             setFriendRequestMessage(
                 messageSamples[type as keyof typeof messageSamples]
             );
+        }
+    };
+
+    const handleLoginTest = async () => {
+        if (!username.trim() || !password.trim()) {
+            onError("아이디와 비밀번호를 모두 입력해주세요.");
+            return;
+        }
+
+        if (friendRequestTargets.length === 0) {
+            onError("먼저 블로그를 검색하고 서이추 목록에 추가해주세요.");
+            return;
+        }
+
+        // 기존 요청 중지
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+
+        // 새 AbortController 생성
+        abortControllerRef.current = new AbortController();
+        const signal = abortControllerRef.current.signal;
+
+        setLoginTestLoading(true);
+        onLoadingChange(true);
+        onError("");
+
+        try {
+            // 클라이언트별 고유한 sessionId 생성
+            const sessionId = `login-test-${Date.now()}-${Math.random()
+                .toString(36)
+                .substr(2, 9)}`;
+            const logger = Logger.getInstance("login-test");
+            const testBlog = friendRequestTargets[0];
+
+            await logger.info(`🔐 로그인 테스트 시작: ${testBlog.title}`);
+
+            const response = await fetch("/api/login-test", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    url: testBlog.url,
+                    username: username.trim(),
+                    password: password.trim(),
+                    headless: effectiveHeadless,
+                    sessionId: sessionId, // 클라이언트 sessionId 전송
+                }),
+                signal,
+            });
+
+            // 중지되었는지 확인
+            if (signal.aborted) {
+                return;
+            }
+
+            const data = await response.json();
+
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || "로그인 테스트에 실패했습니다.");
+            }
+
+            await logger.success(`✅ 로그인 테스트 성공: ${testBlog.title}`);
+        } catch (err) {
+            // 중지된 경우에는 에러 표시하지 않음
+            if (signal.aborted) {
+                const logger = Logger.getInstance("login-test");
+                await logger.info("⏸️ 로그인 테스트가 중지되었습니다.");
+                return;
+            }
+
+            const errorMessage =
+                err instanceof Error
+                    ? err.message
+                    : "알 수 없는 오류가 발생했습니다.";
+            onError(errorMessage);
+
+            const logger = Logger.getInstance("login-test");
+            await logger.error(`❌ 로그인 테스트 실패: ${errorMessage}`);
+        } finally {
+            if (!signal.aborted) {
+                setLoginTestLoading(false);
+                onLoadingChange(false);
+            }
         }
     };
 
@@ -67,17 +166,35 @@ export default function FriendRequestSection({
             return;
         }
 
+        // 기존 요청 중지
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+
+        // 새 AbortController 생성
+        abortControllerRef.current = new AbortController();
+        const signal = abortControllerRef.current.signal;
+
         setFriendRequestLoading(true);
         onLoadingChange(true);
         onError("");
 
         try {
-            const logger = Logger.getInstance("friend-request");
+            // 클라이언트별 고유한 sessionId 생성
+            const sessionId = `friend-request-${Date.now()}-${Math.random()
+                .toString(36)
+                .substr(2, 9)}`;
+            const logger = Logger.getInstance(sessionId);
             await logger.info(
                 `🤝 ${friendRequestTargets.length}개 블로그에 서로이웃 추가 요청을 시작합니다...`
             );
 
             const promises = friendRequestTargets.map(async (blog, index) => {
+                // 중지되었는지 확인
+                if (signal.aborted) {
+                    return { success: false, blog, index, error: "중지됨" };
+                }
+
                 try {
                     await logger.info(
                         `📝 블로그 ${index + 1} 처리 시작: ${blog.title}`
@@ -93,17 +210,27 @@ export default function FriendRequestSection({
                             username: username.trim(),
                             password: password.trim(),
                             message: friendRequestMessage.trim(),
-                            headless: headless,
+                            headless: effectiveHeadless,
                             friendRequest: true,
+                            sessionId: sessionId, // 클라이언트 sessionId 전송
                         }),
+                        signal,
                     });
+
+                    // 중지되었는지 확인
+                    if (signal.aborted) {
+                        return { success: false, blog, index, error: "중지됨" };
+                    }
 
                     const data = await response.json();
 
                     if (!response.ok) {
-                        throw new Error(
-                            data.error || "서로이웃 추가 요청에 실패했습니다."
-                        );
+                        // 더 구체적인 에러 메시지가 있으면 사용
+                        const errorMessage = data.details
+                            ? `${data.error}: ${data.details}`
+                            : data.error ||
+                              "서로이웃 추가 요청에 실패했습니다.";
+                        throw new Error(errorMessage);
                     }
 
                     await logger.success(
@@ -113,6 +240,14 @@ export default function FriendRequestSection({
                     );
                     return { success: true, blog, index };
                 } catch (error) {
+                    // 중지된 경우
+                    if (signal.aborted || error instanceof DOMException) {
+                        await logger.info(
+                            `⏸️ 블로그 ${index + 1} 처리 중지: ${blog.title}`
+                        );
+                        return { success: false, blog, index, error: "중지됨" };
+                    }
+
                     const errorMessage =
                         error instanceof Error
                             ? error.message
@@ -126,16 +261,77 @@ export default function FriendRequestSection({
                 }
             });
 
+            ongoingRequestsRef.current = promises;
+
             const results = await Promise.allSettled(promises);
-            const successCount = results.filter(
+
+            // 중지되었는지 확인
+            if (signal.aborted) {
+                const logger = Logger.getInstance("friend-request");
+                await logger.info("⏸️ 서로이웃 추가 요청이 중지되었습니다.");
+                return;
+            }
+
+            // 성공/실패 분리
+            const successResults = results.filter(
                 (r) => r.status === "fulfilled" && r.value.success
-            ).length;
-            const failCount = results.length - successCount;
+            );
+            const failResults = results.filter(
+                (r) => r.status === "rejected" || !r.value?.success
+            );
+
+            const successCount = successResults.length;
+            const failCount = failResults.length;
+
+            // 성공한 블로그 리스트
+            const successList = successResults
+                .map((r) => {
+                    if (r.status === "fulfilled" && r.value.success) {
+                        return r.value.blog?.title || "알 수 없음";
+                    }
+                    return null;
+                })
+                .filter((title) => title !== null)
+                .join(", ");
+
+            // 실패한 블로그 리스트
+            const failList = failResults
+                .map((r) => {
+                    if (r.status === "fulfilled" && r.value) {
+                        return `${r.value.blog?.title || "알 수 없음"} (${
+                            r.value.error || "알 수 없는 오류"
+                        })`;
+                    } else if (r.status === "rejected") {
+                        return `알 수 없음 (${
+                            r.reason?.message || "알 수 없는 오류"
+                        })`;
+                    }
+                    return null;
+                })
+                .filter((item) => item !== null)
+                .join(", ");
 
             await logger.success(
                 `🎉 서로이웃 추가 완료! 성공: ${successCount}개, 실패: ${failCount}개`
             );
+
+            // 성공한 블로그 리스트 출력
+            if (successList) {
+                await logger.success(`✅ 성공한 블로그: ${successList}`);
+            }
+
+            // 실패한 블로그 리스트 출력
+            if (failList) {
+                await logger.error(`❌ 실패한 블로그: ${failList}`);
+            }
         } catch (err) {
+            // 중지된 경우에는 에러 표시하지 않음
+            if (signal.aborted) {
+                const logger = Logger.getInstance("friend-request");
+                await logger.info("⏸️ 서로이웃 추가 요청이 중지되었습니다.");
+                return;
+            }
+
             const errorMessage =
                 err instanceof Error
                     ? err.message
@@ -145,9 +341,26 @@ export default function FriendRequestSection({
             const logger = Logger.getInstance("friend-request");
             await logger.error(`❌ 서로이웃 추가 실패: ${errorMessage}`);
         } finally {
-            setFriendRequestLoading(false);
-            onLoadingChange(false);
+            if (!signal.aborted) {
+                setFriendRequestLoading(false);
+                onLoadingChange(false);
+            }
+            ongoingRequestsRef.current = [];
         }
+    };
+
+    const handleStop = () => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+
+        setFriendRequestLoading(false);
+        setLoginTestLoading(false);
+        onLoadingChange(false);
+
+        const logger = Logger.getInstance("friend-request");
+        logger.info("⏸️ 모든 요청이 중지되었습니다.");
     };
 
     return (
@@ -212,28 +425,44 @@ export default function FriendRequestSection({
                                 실행 모드
                             </label>
                             <div className="flex gap-2">
-                                <label className="flex-1 flex items-center space-x-2 p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
+                                <label
+                                    className={`flex-1 flex items-center space-x-2 p-3 border border-gray-300 dark:border-gray-600 rounded-lg ${
+                                        isProduction
+                                            ? "opacity-50 cursor-not-allowed"
+                                            : "cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
+                                    }`}
+                                >
                                     <input
                                         type="radio"
                                         name="headless"
                                         value="false"
-                                        checked={!headless}
+                                        checked={!effectiveHeadless}
                                         onChange={() => onHeadlessChange(false)}
-                                        disabled={friendRequestLoading}
+                                        disabled={
+                                            friendRequestLoading || isProduction
+                                        }
                                         className="text-blue-600 focus:ring-blue-500"
                                     />
                                     <span className="text-sm text-gray-700 dark:text-gray-300">
                                         👁️ 브라우저 표시
                                     </span>
                                 </label>
-                                <label className="flex-1 flex items-center space-x-2 p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
+                                <label
+                                    className={`flex-1 flex items-center space-x-2 p-3 border border-gray-300 dark:border-gray-600 rounded-lg ${
+                                        isProduction
+                                            ? "opacity-50 cursor-not-allowed bg-gray-100 dark:bg-gray-700"
+                                            : "cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
+                                    }`}
+                                >
                                     <input
                                         type="radio"
                                         name="headless"
                                         value="true"
-                                        checked={headless}
+                                        checked={effectiveHeadless}
                                         onChange={() => onHeadlessChange(true)}
-                                        disabled={friendRequestLoading}
+                                        disabled={
+                                            friendRequestLoading || isProduction
+                                        }
                                         className="text-blue-600 focus:ring-blue-500"
                                     />
                                     <span className="text-sm text-gray-700 dark:text-gray-300">
@@ -242,8 +471,14 @@ export default function FriendRequestSection({
                                 </label>
                             </div>
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                브라우저 표시: 실행 과정을 화면에서 확인할 수
-                                있습니다
+                                {isProduction ? (
+                                    <span className="text-orange-600 dark:text-orange-400">
+                                        운영 환경에서는 백그라운드 실행 모드만
+                                        사용됩니다.
+                                    </span>
+                                ) : (
+                                    "브라우저 표시: 실행 과정을 화면에서 확인할 수 있습니다"
+                                )}
                             </p>
                         </div>
 
@@ -299,22 +534,48 @@ export default function FriendRequestSection({
                             </p>
                         </div>
 
-                        {/* 서로이웃 추가 버튼 */}
-                        <div className="pt-4">
+                        {/* 로그인 테스트 및 서로이웃 추가 버튼 */}
+                        <div className="pt-4 space-y-3">
                             <button
-                                onClick={handleFriendRequest}
+                                onClick={handleLoginTest}
                                 disabled={
+                                    loginTestLoading ||
                                     friendRequestLoading ||
                                     friendRequestTargets.length === 0 ||
                                     !username.trim() ||
                                     !password.trim()
                                 }
-                                className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-lg font-medium transition-colors"
+                                className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg font-medium transition-colors"
                             >
-                                {friendRequestLoading
-                                    ? "서로이웃 추가 중..."
-                                    : "🤝 서로이웃 추가 요청"}
+                                {loginTestLoading
+                                    ? "로그인 테스트 중..."
+                                    : "🔐 로그인 테스트"}
                             </button>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={handleFriendRequest}
+                                    disabled={
+                                        friendRequestLoading ||
+                                        loginTestLoading ||
+                                        friendRequestTargets.length === 0 ||
+                                        !username.trim() ||
+                                        !password.trim()
+                                    }
+                                    className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-lg font-medium transition-colors"
+                                >
+                                    {friendRequestLoading
+                                        ? "서로이웃 추가 중..."
+                                        : "🤝 서로이웃 추가 요청"}
+                                </button>
+                                {(friendRequestLoading || loginTestLoading) && (
+                                    <button
+                                        onClick={handleStop}
+                                        className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
+                                    >
+                                        ⏸️ 중지
+                                    </button>
+                                )}
+                            </div>
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
                                 {friendRequestTargets.length === 0
                                     ? "먼저 블로그를 검색하고 추가해주세요"
@@ -373,9 +634,20 @@ export default function FriendRequestSection({
                                                 </div>
                                             </div>
                                             <div className="flex-1 min-w-0">
-                                                <h6 className="text-xs font-medium text-gray-800 dark:text-white truncate">
-                                                    {blog.title || "제목 없음"}
-                                                </h6>
+                                                <a
+                                                    href={blog.url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="block hover:opacity-80 transition-opacity"
+                                                    onClick={(e) =>
+                                                        e.stopPropagation()
+                                                    }
+                                                >
+                                                    <h6 className="text-xs font-medium text-gray-800 dark:text-white truncate hover:text-blue-600 dark:hover:text-blue-400">
+                                                        {blog.title ||
+                                                            "제목 없음"}
+                                                    </h6>
+                                                </a>
                                                 <p className="text-xs text-gray-500 dark:text-gray-400">
                                                     👤{" "}
                                                     {blog.author ||
