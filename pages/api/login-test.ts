@@ -5,6 +5,12 @@ import { AutoLoginService } from "@/service/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
 import { loginButtonSelectors } from "@/const/selectors";
+import {
+    DEFAULT_TIMEOUT,
+    PAGE_LOAD_TIMEOUT,
+    ACTION_DELAY,
+    PAGE_NAVIGATION_DELAY,
+} from "@/const";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
@@ -12,8 +18,42 @@ type NextApiResponseWithSocket = NextApiResponse & {
     };
 };
 
-// 타임아웃 상수 정의
-const DEFAULT_TIMEOUT = 30000; // 기본 타임아웃 시간 (ms)
+/**
+ * 로그인 버튼을 찾아서 클릭하는 공통 함수
+ * @param target - Page 또는 Frame (메인 페이지 또는 iframe)
+ * @param selectors - 로그인 버튼 셀렉터 배열
+ * @param logger - Logger 인스턴스
+ * @param contextName - 로그에 표시할 컨텍스트 이름 (예: "메인 페이지", "iframe 1")
+ * @returns 버튼 클릭 성공 여부
+ */
+async function findAndClickLoginButton(
+    target: {
+        $(selector: string): Promise<{ click(): Promise<void> } | null>;
+    },
+    selectors: string[],
+    logger: Logger,
+    contextName: string
+): Promise<boolean> {
+    for (const selector of selectors) {
+        try {
+            const loginButton = await target.$(selector);
+            if (loginButton) {
+                await loginButton.click();
+                await logger.success(
+                    `✅ ${contextName}에서 로그인 버튼 클릭 완료 (선택자: ${selector})`
+                );
+                return true;
+            }
+        } catch (error) {
+            await logger.error(
+                `❌ ${contextName}에서 오류 발생 (${selector}): ${error}`
+            );
+            continue;
+        }
+    }
+    await logger.info(`⚠️ ${contextName}에서 모든 셀렉터 시도 실패`);
+    return false;
+}
 
 export default async function handler(
     req: NextApiRequest,
@@ -76,45 +116,26 @@ export default async function handler(
             `브라우저 실행 완료 (${headless ? "백그라운드" : "화면 표시"} 모드)`
         );
 
-        const page = await browser.newPage();
-
-        // 타임아웃 설정
-        page.setDefaultTimeout(DEFAULT_TIMEOUT);
-        page.setDefaultNavigationTimeout(DEFAULT_TIMEOUT);
-
-        // User-Agent 설정
-        await page.setExtraHTTPHeaders({
-            "User-Agent":
+        // 컨텍스트 생성 및 타임아웃, User-Agent 설정
+        const context = await browser.newContext({
+            userAgent:
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         });
+        context.setDefaultTimeout(PAGE_LOAD_TIMEOUT);
+        context.setDefaultNavigationTimeout(PAGE_LOAD_TIMEOUT);
+
+        // 새 탭 열기
+        const page = await context.newPage();
 
         // 페이지 로드 및 대기
         await logger.info(`페이지 로딩 시작: ${url}`);
+
         await page.goto(url, {
             waitUntil: "domcontentloaded",
             timeout: DEFAULT_TIMEOUT,
         });
+
         await logger.success(`페이지 로딩 완료: ${url}`);
-
-        // 페이지가 완전히 로드될 때까지 대기 (네트워크 유휴 상태)
-        await logger.info("페이지 완전 로드 대기 중...");
-        try {
-            await page.waitForLoadState("networkidle", {
-                timeout: DEFAULT_TIMEOUT,
-            });
-            await logger.success("페이지 완전 로드 완료");
-        } catch {
-            // 네트워크 유휴 상태를 기다릴 수 없으면 최소한 load 상태까지는 기다림
-            await logger.info(
-                "네트워크 유휴 상태 대기 실패, load 상태까지 대기 중..."
-            );
-            await page.waitForLoadState("load", { timeout: DEFAULT_TIMEOUT });
-            await logger.success("페이지 load 상태 완료");
-        }
-
-        // 페이지 제목을 로그에 출력
-        const title = await page.title();
-        await logger.info(`페이지 제목: ${title}`);
 
         // 원래 페이지 URL 저장 (로그인 후 돌아올 페이지)
         const originalUrl = page.url();
@@ -122,61 +143,42 @@ export default async function handler(
 
         // 로그인 버튼 찾기 및 클릭 (블로그 페이지에서 로그인 페이지로 이동)
         await logger.info("🔍 로그인 버튼 검색 중...");
+
+        // 페이지 로드 완료 후 약간의 대기 시간 (동적 콘텐츠 렌더링 대기)
+        await page.waitForTimeout(ACTION_DELAY);
+
         let loginButtonClicked = false;
 
         try {
-            // 먼저 iframe에서 찾기
+            // 먼저 iframe에서 찾기 (순차 처리)
             const frames = page.frames();
             await logger.info(`📋 발견된 iframe 개수: ${frames.length}`);
 
-            for (let i = 0; i < frames.length; i++) {
-                const frame = frames[i];
-                await logger.info(`🔍 iframe ${i + 1}에서 검색 중...`);
+            // iframe을 순차적으로 검색 (먼저 찾으면 중단)
+            for (let index = 0; index < frames.length; index++) {
+                const frame = frames[index];
+                await logger.info(`🔍 iframe ${index + 1}에서 검색 중...`);
+                loginButtonClicked = await findAndClickLoginButton(
+                    frame,
+                    loginButtonSelectors,
+                    logger,
+                    `iframe ${index + 1}`
+                );
 
-                for (const selector of loginButtonSelectors) {
-                    try {
-                        const loginButton = await frame.$(selector);
-                        if (loginButton) {
-                            await logger.info(
-                                `🔘 iframe ${
-                                    i + 1
-                                }에서 로그인 버튼 발견: ${selector}`
-                            );
-                            await loginButton.click();
-                            await logger.success(
-                                `✅ iframe 내 로그인 버튼 클릭 완료 (선택자: ${selector})`
-                            );
-                            loginButtonClicked = true;
-                            break;
-                        }
-                    } catch {
-                        continue;
-                    }
+                // 버튼을 찾았으면 루프 종료
+                if (loginButtonClicked) {
+                    break;
                 }
-
-                if (loginButtonClicked) break;
             }
 
             // iframe에서 못 찾으면 메인 페이지에서 찾기
             if (!loginButtonClicked) {
-                for (const selector of loginButtonSelectors) {
-                    try {
-                        const loginButton = await page.$(selector);
-                        if (loginButton) {
-                            await logger.info(
-                                `🔘 메인 페이지에서 로그인 버튼 발견: ${selector}`
-                            );
-                            await loginButton.click();
-                            await logger.success(
-                                `✅ 로그인 버튼 클릭 완료 (선택자: ${selector})`
-                            );
-                            loginButtonClicked = true;
-                            break;
-                        }
-                    } catch {
-                        continue;
-                    }
-                }
+                loginButtonClicked = await findAndClickLoginButton(
+                    page,
+                    loginButtonSelectors,
+                    logger,
+                    "메인 페이지"
+                );
             }
         } catch (iframeError) {
             await logger.error(`❌ 로그인 버튼 검색 실패: ${iframeError}`);
@@ -186,13 +188,22 @@ export default async function handler(
             throw new Error("로그인 버튼을 찾을 수 없습니다.");
         }
 
-        // 로그인 페이지로 이동할 때까지 대기
+        // 로그인 버튼 클릭 후 로그인 페이지 로드 대기
         await logger.info("⏳ 로그인 페이지 로드 대기 중...");
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(PAGE_NAVIGATION_DELAY);
+
+        // 로그인 페이지가 로드되었는지 확인 (input#id 필드가 나타날 때까지 대기)
+        try {
+            await page.waitForSelector("input#id", { timeout: 5000 });
+            await logger.success("✅ 로그인 페이지 로드 완료");
+        } catch (error) {
+            await logger.error(`⚠️ 로그인 페이지 로드 확인 실패: ${error}`);
+            // 계속 진행 (페이지가 로드되었을 수도 있음)
+        }
 
         // 로그인 시도
         await logger.info("자동 로그인 시도 중...");
-        const loginService = new AutoLoginService(page);
+        const loginService = new AutoLoginService(page, logger);
         const loginResult = await loginService.attemptLogin({
             username,
             password,
@@ -208,7 +219,6 @@ export default async function handler(
 
         // 로그인 완료 후 대기 (리다이렉트 대기)
         await logger.info("⏳ 로그인 완료 및 페이지 리다이렉트 대기 중...");
-        await page.waitForTimeout(3000); // 리다이렉트 대기 시간
 
         // 현재 URL 확인
         let currentUrl = page.url();
@@ -219,7 +229,7 @@ export default async function handler(
         const maxRedirectAttempts = 5;
 
         while (redirectAttempts < maxRedirectAttempts) {
-            await page.waitForTimeout(1000);
+            await page.waitForTimeout(ACTION_DELAY);
             currentUrl = page.url();
 
             // 원래 페이지로 돌아왔는지 확인
