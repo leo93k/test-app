@@ -122,3 +122,15 @@ export const blogAuthorSelectors = [
     ".writer",
     ".blogger",
 ];
+
+// 로그인 오류 메시지 선택자
+export const loginErrorSelectors = [
+    ".error_message",
+    "#error_message",
+    ".err_msg",
+    "#err_msg",
+    ".alert",
+    ".alert-danger",
+    "[class*='error']",
+    "[id*='error']",
+];
