@@ -1,0 +1,318 @@
+import { NextApiRequest, NextApiResponse } from "next";
+import { Server as HTTPServer } from "http";
+import { chromium } from "playwright";
+import { AutoLoginService } from "@/lib/loginService";
+import { Logger } from "@/service/logger";
+import { initializeSocketServer } from "@/service/socket";
+import { loginButtonSelectors } from "@/const/selectors";
+
+type NextApiResponseWithSocket = NextApiResponse & {
+    socket: {
+        server: HTTPServer;
+    };
+};
+
+// Delay 상수 정의
+const PAGE_NAVIGATION_DELAY = 300; // 페이지 이동 후 대기 시간 (ms)
+
+export default async function handler(
+    req: NextApiRequest,
+    res: NextApiResponseWithSocket
+) {
+    // POST 메서드만 허용
+    if (req.method !== "POST") {
+        return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    // Socket.io 서버 초기화 (로깅을 위해)
+    await initializeSocketServer(res.socket.server);
+
+    let browser = null;
+    // 클라이언트에서 전송한 sessionId 사용, 없으면 생성
+    const sessionId =
+        req.body.sessionId ||
+        `server-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const logger = Logger.getInstance(sessionId);
+
+    try {
+        const { url, username, password, headless = false } = req.body;
+
+        // 필수 파라미터 검증
+        if (!url) {
+            return res.status(400).json({ error: "URL is required" });
+        }
+
+        if (!username || !password) {
+            return res
+                .status(400)
+                .json({ error: "Username and password are required" });
+        }
+
+        // URL 유효성 검사
+        try {
+            new URL(url);
+        } catch {
+            return res.status(400).json({ error: "Invalid URL format" });
+        }
+
+        await logger.info(`🔐 로그인 테스트 시작: ${url}`);
+
+        // Playwright 브라우저 실행
+        await logger.info(
+            `브라우저 실행 중... (${
+                headless ? "백그라운드" : "화면 표시"
+            } 모드)`
+        );
+        browser = await chromium.launch({
+            headless: headless,
+            slowMo: headless ? 0 : 1000,
+            args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                ...(headless ? [] : ["--start-maximized"]),
+            ],
+        });
+        await logger.success(
+            `브라우저 실행 완료 (${headless ? "백그라운드" : "화면 표시"} 모드)`
+        );
+
+        const page = await browser.newPage();
+
+        // 타임아웃 설정
+        page.setDefaultTimeout(30000);
+        page.setDefaultNavigationTimeout(30000);
+
+        // User-Agent 설정
+        await page.setExtraHTTPHeaders({
+            "User-Agent":
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        });
+
+        // 페이지 로드 및 대기
+        await logger.info(`페이지 로딩 시작: ${url}`);
+        await page.goto(url, {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+        });
+        await logger.success(`페이지 로딩 완료: ${url}`);
+
+        // 페이지가 완전히 로드될 때까지 잠시 대기
+        await logger.info("페이지 완전 로드 대기 중...");
+        await page.waitForTimeout(PAGE_NAVIGATION_DELAY);
+        await logger.success("페이지 완전 로드 완료");
+
+        // 페이지 제목을 로그에 출력
+        const title = await page.title();
+        await logger.info(`페이지 제목: ${title}`);
+
+        // 원래 페이지 URL 저장 (로그인 후 돌아올 페이지)
+        const originalUrl = page.url();
+        await logger.info(`원래 페이지 URL 저장: ${originalUrl}`);
+
+        // 로그인 버튼 찾기 및 클릭 (블로그 페이지에서 로그인 페이지로 이동)
+        await logger.info("🔍 로그인 버튼 검색 중...");
+        let loginButtonClicked = false;
+
+        try {
+            // 먼저 iframe에서 찾기
+            const frames = page.frames();
+            await logger.info(`📋 발견된 iframe 개수: ${frames.length}`);
+
+            for (let i = 0; i < frames.length; i++) {
+                const frame = frames[i];
+                await logger.info(`🔍 iframe ${i + 1}에서 검색 중...`);
+
+                for (const selector of loginButtonSelectors) {
+                    try {
+                        const loginButton = await frame.$(selector);
+                        if (loginButton) {
+                            await logger.info(
+                                `🔘 iframe ${
+                                    i + 1
+                                }에서 로그인 버튼 발견: ${selector}`
+                            );
+                            await loginButton.click();
+                            await logger.success(
+                                `✅ iframe 내 로그인 버튼 클릭 완료 (선택자: ${selector})`
+                            );
+                            loginButtonClicked = true;
+                            break;
+                        }
+                    } catch {
+                        continue;
+                    }
+                }
+
+                if (loginButtonClicked) break;
+            }
+
+            // iframe에서 못 찾으면 메인 페이지에서 찾기
+            if (!loginButtonClicked) {
+                for (const selector of loginButtonSelectors) {
+                    try {
+                        const loginButton = await page.$(selector);
+                        if (loginButton) {
+                            await logger.info(
+                                `🔘 메인 페이지에서 로그인 버튼 발견: ${selector}`
+                            );
+                            await loginButton.click();
+                            await logger.success(
+                                `✅ 로그인 버튼 클릭 완료 (선택자: ${selector})`
+                            );
+                            loginButtonClicked = true;
+                            break;
+                        }
+                    } catch {
+                        continue;
+                    }
+                }
+            }
+        } catch (iframeError) {
+            await logger.error(`❌ 로그인 버튼 검색 실패: ${iframeError}`);
+        }
+
+        if (!loginButtonClicked) {
+            throw new Error("로그인 버튼을 찾을 수 없습니다.");
+        }
+
+        // 로그인 페이지로 이동할 때까지 대기
+        await logger.info("⏳ 로그인 페이지 로드 대기 중...");
+        await page.waitForTimeout(1000);
+
+        // 로그인 시도
+        await logger.info("자동 로그인 시도 중...");
+        const loginService = new AutoLoginService(page);
+        const loginResult = await loginService.attemptLogin({
+            username,
+            password,
+        });
+
+        if (!loginResult.success) {
+            await logger.error(`❌ 로그인 실패: ${loginResult.message}`);
+            return res.status(400).json({
+                success: false,
+                error: loginResult.message,
+            });
+        }
+
+        // 로그인 완료 후 대기 (리다이렉트 대기)
+        await logger.info("⏳ 로그인 완료 및 페이지 리다이렉트 대기 중...");
+        await page.waitForTimeout(3000); // 리다이렉트 대기 시간
+
+        // 현재 URL 확인
+        let currentUrl = page.url();
+        await logger.info(`로그인 후 현재 URL: ${currentUrl}`);
+
+        // 추가 대기 후 URL 재확인 (리다이렉트가 지연될 수 있음)
+        let redirectAttempts = 0;
+        const maxRedirectAttempts = 5;
+
+        while (redirectAttempts < maxRedirectAttempts) {
+            await page.waitForTimeout(1000);
+            currentUrl = page.url();
+
+            // 원래 페이지로 돌아왔는지 확인
+            if (
+                currentUrl === originalUrl ||
+                currentUrl.startsWith(originalUrl.split("?")[0])
+            ) {
+                await logger.success(`✅ 원래 페이지로 돌아옴: ${currentUrl}`);
+                break;
+            }
+
+            // 자동문자 입력 방지 페이지인지 확인 (캡차 또는 보안 페이지)
+            if (
+                currentUrl.includes("captcha") ||
+                currentUrl.includes("security") ||
+                currentUrl.includes("verify") ||
+                currentUrl.includes("challenge") ||
+                currentUrl.includes("robot") ||
+                currentUrl.includes("자동입력방지")
+            ) {
+                await logger.error(
+                    `❌ 자동문자 입력 방지 페이지로 이동됨: ${currentUrl}`
+                );
+                return res.status(400).json({
+                    success: false,
+                    error: "자동문자 입력 방지 페이지로 이동했습니다. 로그인이 실패했습니다.",
+                    currentUrl: currentUrl,
+                });
+            }
+
+            redirectAttempts++;
+            await logger.info(
+                `리다이렉트 대기 중... (${redirectAttempts}/${maxRedirectAttempts})`
+            );
+        }
+
+        // 최종 URL 확인
+        currentUrl = page.url();
+        await logger.info(`최종 URL: ${currentUrl}`);
+
+        // 원래 페이지로 돌아왔는지 확인
+        const isOriginalPage =
+            currentUrl === originalUrl ||
+            currentUrl.startsWith(originalUrl.split("?")[0]) ||
+            (originalUrl.includes("blog.naver.com") &&
+                currentUrl.includes("blog.naver.com"));
+
+        if (!isOriginalPage) {
+            // 자동문자 입력 방지 페이지인지 다시 확인
+            if (
+                currentUrl.includes("captcha") ||
+                currentUrl.includes("security") ||
+                currentUrl.includes("verify") ||
+                currentUrl.includes("challenge") ||
+                currentUrl.includes("robot") ||
+                currentUrl.includes("자동입력방지") ||
+                currentUrl.includes("nidlogin") ||
+                !currentUrl.includes("blog.naver.com")
+            ) {
+                await logger.error(
+                    `❌ 로그인 실패: 원래 페이지로 돌아오지 못했습니다. 현재 URL: ${currentUrl}`
+                );
+                return res.status(400).json({
+                    success: false,
+                    error: "로그인 후 원래 페이지로 돌아오지 못했습니다. 자동문자 입력 방지 페이지일 수 있습니다.",
+                    currentUrl: currentUrl,
+                    originalUrl: originalUrl,
+                });
+            }
+        }
+
+        await logger.success(`✅ 로그인 테스트 성공: 원래 페이지로 돌아옴`);
+        return res.status(200).json({
+            success: true,
+            message: "로그인 성공 및 원래 페이지 복귀 완료",
+            currentUrl: currentUrl,
+            originalUrl: originalUrl,
+        });
+    } catch (error) {
+        const errorMessage =
+            error instanceof Error
+                ? error.message
+                : "알 수 없는 오류가 발생했습니다.";
+        await logger.error(`❌ 로그인 테스트 오류: ${errorMessage}`);
+
+        return res.status(500).json({
+            success: false,
+            error: errorMessage,
+        });
+    } finally {
+        // 브라우저 종료
+        if (browser) {
+            try {
+                await browser.close();
+                await logger.info("브라우저 종료 완료");
+            } catch (closeError) {
+                await logger.error(
+                    `브라우저 종료 중 오류: ${
+                        closeError instanceof Error
+                            ? closeError.message
+                            : "알 수 없는 오류"
+                    }`
+                );
+            }
+        }
+    }
+}
