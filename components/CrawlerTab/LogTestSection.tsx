@@ -131,23 +131,16 @@ export default function LogTestSection() {
                 );
             }
 
-            // 소켓에 join-session을 다시 보내서 확실히 등록 (이미 등록되어 있어도 문제없음)
-            const { connectSocket } = await import("@/lib/socket");
-            const socket = connectSocket();
-
-            // 실제 소켓 연결 상태 확인
-            const actuallyConnected = socket.connected;
-            if (!actuallyConnected) {
+            // 소켓 초기화 (없으면 생성, 있으면 재사용)
+            const { ensureSocketInitialized } = await import(
+                "@/lib/utils/socketInit"
+            );
+            const socketInitialized = await ensureSocketInitialized(sessionId);
+            if (!socketInitialized) {
                 throw new Error(
                     "소켓이 연결되지 않았습니다. 소켓 연결을 확인해주세요."
                 );
             }
-
-            socket.emit("join-session", sessionId);
-            console.log(`📤 Sent sessionId to server: ${sessionId}`);
-
-            // 약간의 지연 후 테스트 로그 API 호출
-            await new Promise((resolve) => setTimeout(resolve, 100));
 
             const response = await fetch("/api/test-log", {
                 method: "POST",

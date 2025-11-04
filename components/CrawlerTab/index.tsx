@@ -36,16 +36,6 @@ export default function CrawlerTab() {
         setError("");
 
         try {
-            // Socket.io 서버 초기화 확인 및 초기화 시도
-            try {
-                await fetch("/api/socket", { method: "GET" });
-            } catch (socketError) {
-                console.warn(
-                    "Socket.io 서버 초기화 실패, 계속 진행:",
-                    socketError
-                );
-            }
-
             // useSocket에서 생성한 sessionId 사용 (항상 생성되므로 null 체크만)
             if (!sessionId) {
                 throw new Error(
@@ -53,16 +43,14 @@ export default function CrawlerTab() {
                 );
             }
 
-            // 소켓에 join-session을 다시 보내서 확실히 등록 (이미 등록되어 있어도 문제없음)
-            const { connectSocket } = await import("@/lib/socket");
-            const socket = connectSocket();
-            if (socket.connected) {
-                socket.emit("join-session", sessionId);
-                console.log(`📤 Sent sessionId to server: ${sessionId}`);
+            // 소켓 초기화 (없으면 생성, 있으면 재사용)
+            const { ensureSocketInitialized } = await import(
+                "@/lib/utils/socketInit"
+            );
+            const socketInitialized = await ensureSocketInitialized(sessionId);
+            if (!socketInitialized) {
+                console.warn("소켓 초기화 실패, 계속 진행...");
             }
-
-            // 약간의 지연 후 API 호출 (소켓 등록이 완료되도록)
-            await new Promise((resolve) => setTimeout(resolve, 100));
 
             const response = await fetch("/api/blog-search", {
                 method: "POST",
