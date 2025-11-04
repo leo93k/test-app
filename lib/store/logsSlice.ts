@@ -1,5 +1,7 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
+import { MAX_LOGS } from "../../service/logger";
 
+// LogEntry 인터페이스 및 logsSlice
 export interface LogEntry {
     id: string;
     message: string;
@@ -35,15 +37,15 @@ const logsSlice = createSlice({
 
             state.logs.push(logEntry);
 
-            // 최대 100개 로그만 유지 (최신이 위로)
-            if (state.logs.length > 100) {
+            // 최대 로그 개수만 유지 (최신이 위로)
+            if (state.logs.length > MAX_LOGS) {
                 state.logs = state.logs
                     .sort(
                         (a, b) =>
                             new Date(b.timestamp).getTime() -
                             new Date(a.timestamp).getTime()
                     )
-                    .slice(0, 100);
+                    .slice(0, MAX_LOGS);
             } else {
                 // 최신 로그가 위로 오도록 정렬
                 state.logs.sort(
