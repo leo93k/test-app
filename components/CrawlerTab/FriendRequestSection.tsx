@@ -42,8 +42,7 @@ const messageSamples = {
     sample5: "블로그 운영 화이팅! 서로이웃 신청드립니다. 함께 성장해요! 🚀",
 };
 
-const isProduction = true;
-// const isProduction = process.env.NODE_ENV === "production";
+const isProduction = process.env.NODE_ENV === "production";
 
 export default function FriendRequestSection({
     username,
@@ -66,8 +65,9 @@ export default function FriendRequestSection({
         (state) => state.settings.maxConcurrent
     );
 
-    // 프로덕션 환경에서는 headless를 true로 고정
-    const effectiveHeadless = isProduction ? true : headless;
+    // 프로덕션 환경에서도 headless 선택 가능 (임시로 풀어둠)
+    // const effectiveHeadless = isProduction ? true : headless;
+    const effectiveHeadless = headless;
     const [selectedMessageType, setSelectedMessageType] = useState("sample1");
     const [friendRequestMessage, setFriendRequestMessage] = useState(
         messageSamples.sample1
