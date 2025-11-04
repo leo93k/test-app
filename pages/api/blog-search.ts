@@ -9,7 +9,11 @@ import {
     blogDescriptionSelectors,
     blogAuthorSelectors,
 } from "@/const/selectors";
-import { NAVER_BLOG_SEARCH_URL, PAGE_LOAD_TIMEOUT } from "@/const";
+import {
+    NAVER_BLOG_SEARCH_URL,
+    PAGE_LOAD_TIMEOUT,
+    PAGE_NAVIGATION_DELAY,
+} from "@/const";
 
 interface BlogSearchResult {
     title: string;
@@ -237,6 +241,12 @@ export default async function handler(
                     await logger.info(
                         `네이버 블로그 검색 페이지 ${pageNo}: ${pageTitle} (${currentUrl})`
                     );
+
+                    // 검색 결과가 렌더링될 때까지 대기
+                    await logger.info(
+                        `페이지 ${pageNo} 검색 결과 렌더링 대기 중...`
+                    );
+                    await page.waitForTimeout(PAGE_NAVIGATION_DELAY);
 
                     // 함수를 문자열로 변환하여 브라우저 컨텍스트에 전달
                     const parseFunctionsCode = `

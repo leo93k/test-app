@@ -20,4 +20,4 @@ export const ACTION_DELAY = 300; // 1초
 
 // ==================== 페이지 이동 대기 시간 ====================
 // 페이지 이동/로드 후 대기 시간 (밀리초)
-export const PAGE_NAVIGATION_DELAY = 1000; // 1초
+export const PAGE_NAVIGATION_DELAY = 500; // 0.5초
