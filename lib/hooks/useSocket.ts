@@ -89,8 +89,6 @@ export function useSocket() {
                 type: string;
                 timestamp: string;
             }) => {
-                console.log("📨 Log received via WebSocket:", data);
-                console.log("📦 Dispatching to Redux...");
                 // Redux store에 직접 dispatch (전역적으로 한 번만 등록되므로 store 직접 사용)
                 store.dispatch(
                     addLog({
@@ -98,7 +96,6 @@ export function useSocket() {
                         type: data.type as "info" | "success" | "error",
                     })
                 );
-                console.log("✅ Log dispatched to Redux");
             };
 
             // 이벤트 리스너 등록 (소켓이 연결되면 자동으로 작동)

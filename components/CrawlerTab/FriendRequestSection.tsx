@@ -163,10 +163,7 @@ export default function FriendRequestSection({
                     : "알 수 없는 오류가 발생했습니다.";
             onError(errorMessage);
 
-            if (sessionId) {
-                const logger = Logger.getInstance(sessionId);
-                await logger.error(`❌ 로그인 테스트 실패: ${errorMessage}`);
-            }
+            // 서버 측에서 이미 에러 로그를 출력하므로 클라이언트에서는 중복 로깅하지 않음
         } finally {
             if (!signal.aborted) {
                 setLoginTestLoading(false);

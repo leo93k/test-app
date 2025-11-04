@@ -66,47 +66,6 @@ class SocketClient {
             reconnectionAttempts: 5,
         });
 
-        // 이벤트 리스너는 한 번만 등록
-        this.clientSocket.once("connect", () => {
-            console.log(
-                "✅ Socket.io client connected:",
-                this.clientSocket?.id
-            );
-            console.log("🔗 Socket URL:", socketUrl);
-            console.log("🔗 Socket path:", "/api/socket.io");
-        });
-
-        this.clientSocket.on("disconnect", (reason) => {
-            console.log(
-                "❌ Socket.io client disconnected:",
-                reason,
-                "Socket ID:",
-                this.clientSocket?.id
-            );
-        });
-
-        this.clientSocket.on("connect_error", (error) => {
-            console.error("❌ Socket.io connection error:", error);
-        });
-
-        this.clientSocket.on("reconnect", (attemptNumber) => {
-            console.log(
-                "🔄 Socket.io reconnected after",
-                attemptNumber,
-                "attempts. New ID:",
-                this.clientSocket?.id
-            );
-        });
-
-        // 모든 이벤트 디버깅 (개발 환경에서만)
-        if (process.env.NODE_ENV === "development") {
-            this.clientSocket.onAny((eventName, ...args) => {
-                if (eventName === SOCKET_EVENTS.LOG) {
-                    console.log("🔍 Socket.io received 'log' event:", args[0]);
-                }
-            });
-        }
-
         return this.clientSocket;
     }
 

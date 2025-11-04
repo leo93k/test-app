@@ -305,8 +305,8 @@ export default async function handler(
 
                     // 결과가 없을 때 디버깅 정보 추가
                     if (naverResults.length === 0) {
-                        await logger.info(
-                            `⚠️ 페이지 ${pageNo}에서 결과를 찾을 수 없습니다. 네이버 블로그 검색 페이지 구조가 변경되었을 수 있습니다.`
+                        await logger.error(
+                            `⚠️ 페이지 ${pageNo}에서 결과를 찾을 수 없습니다. 다시 시도해주세요.`
                         );
                     } else {
                         await logger.success(
