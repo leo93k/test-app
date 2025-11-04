@@ -5,15 +5,13 @@ import { AutoLoginService } from "@/service/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
 import { executeFriendRequestProcess } from "@/service/crawler/friendRequestFlow";
+import { DEFAULT_TIMEOUT } from "@/const";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
         server: HTTPServer;
     };
 };
-
-// Delay 상수 정의
-const PAGE_NAVIGATION_DELAY = 300; // 페이지 이동 후 대기 시간 (ms)
 
 export default async function handler(
     req: NextApiRequest,
@@ -79,10 +77,9 @@ export default async function handler(
 
         const page = await browser.newPage();
 
-        // 타임아웃 설정 (headless 모드에서는 더 긴 타임아웃)
-        const timeout = headless ? 45000 : 30000;
-        page.setDefaultTimeout(timeout);
-        page.setDefaultNavigationTimeout(timeout);
+        // 타임아웃 설정
+        page.setDefaultTimeout(DEFAULT_TIMEOUT);
+        page.setDefaultNavigationTimeout(DEFAULT_TIMEOUT);
 
         // User-Agent 설정
         await page.setExtraHTTPHeaders({
@@ -99,17 +96,9 @@ export default async function handler(
         await logger.info(`페이지 로딩 시작: ${url}`);
         await page.goto(url, {
             waitUntil: headless ? "networkidle" : "domcontentloaded",
-            timeout: 30000,
+            timeout: DEFAULT_TIMEOUT,
         });
         await logger.success(`페이지 로딩 완료: ${url}`);
-
-        // 페이지가 완전히 로드될 때까지 잠시 대기 (headless 모드에서는 더 긴 대기)
-        const waitTime = headless
-            ? PAGE_NAVIGATION_DELAY * 2
-            : PAGE_NAVIGATION_DELAY;
-        await logger.info(`페이지 완전 로드 대기 중... (${waitTime}ms)`);
-        await page.waitForTimeout(waitTime);
-        await logger.success("페이지 완전 로드 완료");
 
         // 페이지 제목을 로그에 출력
         const title = await page.title();
@@ -118,7 +107,7 @@ export default async function handler(
         // 로그인 정보가 제공된 경우 자동 로그인 시도 (서로이웃 추가 모드가 아닐 때만)
         if (username && password && !friendRequest) {
             await logger.info("자동 로그인 시도 중...");
-            const loginService = new AutoLoginService(page);
+            const loginService = new AutoLoginService(page, logger);
             const loginResult = await loginService.attemptLogin({
                 username,
                 password,
@@ -136,14 +125,6 @@ export default async function handler(
         }
 
         // 서로이웃 추가 모드인 경우
-        // headless 모드에서는 더 긴 대기 시간
-        const friendRequestDelay = headless
-            ? PAGE_NAVIGATION_DELAY * 2
-            : PAGE_NAVIGATION_DELAY;
-        await logger.info(
-            `서로이웃 추가 프로세스 시작 전 대기 중... (${friendRequestDelay}ms)`
-        );
-        await page.waitForTimeout(friendRequestDelay);
         await executeFriendRequestProcess(
             page,
             logger,
