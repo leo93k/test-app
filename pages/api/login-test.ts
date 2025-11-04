@@ -12,8 +12,8 @@ type NextApiResponseWithSocket = NextApiResponse & {
     };
 };
 
-// Delay 상수 정의
-const PAGE_NAVIGATION_DELAY = 300; // 페이지 이동 후 대기 시간 (ms)
+// 타임아웃 상수 정의
+const DEFAULT_TIMEOUT = 30000; // 기본 타임아웃 시간 (ms)
 
 export default async function handler(
     req: NextApiRequest,
@@ -79,8 +79,8 @@ export default async function handler(
         const page = await browser.newPage();
 
         // 타임아웃 설정
-        page.setDefaultTimeout(30000);
-        page.setDefaultNavigationTimeout(30000);
+        page.setDefaultTimeout(DEFAULT_TIMEOUT);
+        page.setDefaultNavigationTimeout(DEFAULT_TIMEOUT);
 
         // User-Agent 설정
         await page.setExtraHTTPHeaders({
@@ -92,14 +92,25 @@ export default async function handler(
         await logger.info(`페이지 로딩 시작: ${url}`);
         await page.goto(url, {
             waitUntil: "domcontentloaded",
-            timeout: 30000,
+            timeout: DEFAULT_TIMEOUT,
         });
         await logger.success(`페이지 로딩 완료: ${url}`);
 
-        // 페이지가 완전히 로드될 때까지 잠시 대기
+        // 페이지가 완전히 로드될 때까지 대기 (네트워크 유휴 상태)
         await logger.info("페이지 완전 로드 대기 중...");
-        await page.waitForTimeout(PAGE_NAVIGATION_DELAY);
-        await logger.success("페이지 완전 로드 완료");
+        try {
+            await page.waitForLoadState("networkidle", {
+                timeout: DEFAULT_TIMEOUT,
+            });
+            await logger.success("페이지 완전 로드 완료");
+        } catch {
+            // 네트워크 유휴 상태를 기다릴 수 없으면 최소한 load 상태까지는 기다림
+            await logger.info(
+                "네트워크 유휴 상태 대기 실패, load 상태까지 대기 중..."
+            );
+            await page.waitForLoadState("load", { timeout: DEFAULT_TIMEOUT });
+            await logger.success("페이지 load 상태 완료");
+        }
 
         // 페이지 제목을 로그에 출력
         const title = await page.title();
