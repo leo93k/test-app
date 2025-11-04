@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { socketClient } from "../../lib/socket";
+import { socketClient } from "@/lib/socket";
 import { useAppDispatch } from "../hooks";
-import { addLog } from "../../lib/store/logsSlice";
-import { store } from "../../lib/store";
+import { addLog } from "@/lib/store/logsSlice";
+import { store } from "@/lib/store";
+import { SOCKET_EVENTS } from "@/const/socketEvents";
 
 // 전역 리스너 등록 플래그 (소켓 리스너는 한 번만 등록되어야 함)
 let globalLogListenerRegistered = false;
@@ -105,7 +106,7 @@ export function useSocket() {
             socket.on("disconnect", handleDisconnect);
             socket.on("connect_error", handleConnectError);
             socket.on("reconnect", handleReconnect);
-            socket.on("log", handleLog);
+            socket.on(SOCKET_EVENTS.LOG, handleLog);
 
             console.log("✅ Log listener registered on socket (global)");
 
@@ -114,7 +115,7 @@ export function useSocket() {
 
             // 전역 unsubscribe 함수 저장
             globalUnsubscribeFn = () => {
-                socket.off("log", handleLog);
+                socket.off(SOCKET_EVENTS.LOG, handleLog);
                 socket.off("connect", handleConnect);
                 socket.off("disconnect", handleDisconnect);
                 socket.off("connect_error", handleConnectError);

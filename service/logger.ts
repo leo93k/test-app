@@ -1,5 +1,6 @@
 import { store } from "../lib/store";
 import { addLog } from "../lib/store/logsSlice";
+import { SOCKET_EVENTS } from "@/const/socketEvents";
 
 // 최대 로그 개수 상수
 export const MAX_LOGS = 100;
@@ -76,7 +77,7 @@ export class Logger {
                             (socket: {
                                 emit: (event: string, data: unknown) => void;
                             }) => {
-                                socket.emit("log", logData);
+                                socket.emit(SOCKET_EVENTS.LOG, logData);
                             }
                         );
                     }

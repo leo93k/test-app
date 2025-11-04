@@ -3,6 +3,8 @@
  * 로그 관련 API 호출 전에 소켓이 없으면 생성하고, sessionId를 전송합니다.
  */
 
+import { SOCKET_EVENTS } from "@/const/socketEvents";
+
 /**
  * 소켓을 초기화하고 sessionId를 등록합니다.
  * 소켓이 이미 연결되어 있으면 재사용하고, 없으면 생성합니다.
@@ -28,7 +30,7 @@ export async function ensureSocketInitialized(
 
         // 소켓이 연결되어 있으면 sessionId 전송
         if (socket.connected) {
-            socket.emit("join-session", sessionId);
+            socket.emit(SOCKET_EVENTS.JOIN_SESSION, sessionId);
             console.log(`📤 Sent sessionId to server: ${sessionId}`);
             return true;
         }
@@ -41,7 +43,7 @@ export async function ensureSocketInitialized(
 
             const onConnect = () => {
                 clearTimeout(timeout);
-                socket.emit("join-session", sessionId);
+                socket.emit(SOCKET_EVENTS.JOIN_SESSION, sessionId);
                 console.log(`📤 Sent sessionId to server: ${sessionId}`);
                 socket.off("connect", onConnect);
                 socket.off("connect_error", onError);

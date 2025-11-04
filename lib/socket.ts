@@ -1,4 +1,5 @@
 import { io, Socket } from "socket.io-client";
+import { SOCKET_EVENTS } from "@/const/socketEvents";
 
 /**
  * 클라이언트 사이드: Socket.io 클라이언트 관리
@@ -100,7 +101,7 @@ class SocketClient {
         // 모든 이벤트 디버깅 (개발 환경에서만)
         if (process.env.NODE_ENV === "development") {
             this.clientSocket.onAny((eventName, ...args) => {
-                if (eventName === "log") {
+                if (eventName === SOCKET_EVENTS.LOG) {
                     console.log("🔍 Socket.io received 'log' event:", args[0]);
                 }
             });

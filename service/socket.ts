@@ -1,4 +1,5 @@
 import type { Server as HTTPServer } from "http";
+import { SOCKET_EVENTS } from "@/const/socketEvents";
 
 // 서버 사이드 타입 정의 (socket.io는 동적 import로 처리)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -115,9 +116,11 @@ class SocketServer {
                 io?.sockets.sockets.size || 0
             );
 
-            // 클라이언트가 sessionId를 전송하면 저장
-            socket.on("join-session", (sessionId: string) => {
+            // 클라이언트가 sessionId를 전송하면 저장 및 room에 추가
+            socket.on(SOCKET_EVENTS.JOIN_SESSION, (sessionId: string) => {
                 socket.data.sessionId = sessionId;
+                // sessionId를 room 이름으로 사용하여 그룹화
+                socket.join(sessionId);
                 console.log(
                     `🔗 Socket ${socket.id} joined session: ${sessionId}`
                 );
@@ -125,14 +128,14 @@ class SocketServer {
 
             // 로그 수신 핸들러 (클라이언트 간 브로드캐스트는 제거)
             socket.on(
-                "log",
+                SOCKET_EVENTS.LOG,
                 (data: {
                     message: string;
                     type: string;
                     timestamp: string;
                 }) => {
                     // 클라이언트 간 로그 브로드캐스트 제거 (세션 분리)
-                    // socket.broadcast.emit("log", data);
+                    // socket.broadcast.emit(SOCKET_EVENTS.LOG, data);
                 }
             );
 
