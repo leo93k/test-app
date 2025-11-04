@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { Server as HTTPServer } from "http";
 import { initializeSocketServer } from "@/service/socket";
-import { Logger } from "@/lib/logger";
+import { Logger } from "@/service/logger";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
@@ -21,9 +21,13 @@ export default async function handler(
     await initializeSocketServer(res.socket.server);
 
     try {
-        const { type = "info", message } = req.body;
+        const { type = "info", message, sessionId } = req.body;
 
-        const logger = Logger.getInstance("api-test");
+        // 클라이언트에서 전송한 sessionId 사용, 없으면 생성
+        const loggerSessionId =
+            sessionId ||
+            `api-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const logger = Logger.getInstance(loggerSessionId);
 
         // 지연을 주어서 여러 로그가 순차적으로 보이도록 함
         await new Promise((resolve) => setTimeout(resolve, 100));

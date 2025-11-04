@@ -6,6 +6,9 @@ type SocketIOServer = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ServerSocket = any;
 
+// 글로벌 HTTP 서버 인스턴스 저장 (Pages Router에서 설정)
+let globalHttpServer: HTTPServer | null = null;
+
 /**
  * 서버 사이드: Socket.io 서버 관리 클래스
  * 서버 환경에서만 사용됩니다.
@@ -34,8 +37,26 @@ class SocketServer {
 
     /**
      * 서버 사이드: Socket.io 서버 인스턴스 가져오기
+     * 없으면 HTTP 서버 인스턴스를 사용해서 자동 초기화 시도
      */
-    public getServer(): SocketIOServer | null {
+    public async getServer(): Promise<SocketIOServer | null> {
+        // 이미 초기화된 서버가 있으면 반환
+        if (this.serverSocket) {
+            return this.serverSocket;
+        }
+
+        // HTTP 서버 인스턴스가 저장되어 있으면 자동 초기화 시도
+        if (globalHttpServer) {
+            return await this.initializeServer(globalHttpServer);
+        }
+
+        return null;
+    }
+
+    /**
+     * 동기 버전: Socket.io 서버 인스턴스 가져오기 (호환성 유지)
+     */
+    public getServerSync(): SocketIOServer | null {
         return this.serverSocket;
     }
 
@@ -46,6 +67,9 @@ class SocketServer {
     public async initializeServer(
         httpServer: HTTPServer
     ): Promise<SocketIOServer | null> {
+        // HTTP 서버 인스턴스 저장 (나중에 자동 초기화에 사용)
+        globalHttpServer = httpServer;
+
         // 이미 초기화된 서버가 있으면 반환
         if (this.serverSocket) {
             console.log("Socket.io server already running.");
@@ -91,7 +115,15 @@ class SocketServer {
                 io?.sockets.sockets.size || 0
             );
 
-            // 로그 수신 핸들러
+            // 클라이언트가 sessionId를 전송하면 저장
+            socket.on("join-session", (sessionId: string) => {
+                socket.data.sessionId = sessionId;
+                console.log(
+                    `🔗 Socket ${socket.id} joined session: ${sessionId}`
+                );
+            });
+
+            // 로그 수신 핸들러 (클라이언트 간 브로드캐스트는 제거)
             socket.on(
                 "log",
                 (data: {
@@ -99,8 +131,8 @@ class SocketServer {
                     type: string;
                     timestamp: string;
                 }) => {
-                    // 클라이언트에서 로그를 보내면 모든 클라이언트에게 브로드캐스트
-                    socket.broadcast.emit("log", data);
+                    // 클라이언트 간 로그 브로드캐스트 제거 (세션 분리)
+                    // socket.broadcast.emit("log", data);
                 }
             );
 
@@ -133,8 +165,19 @@ export function setSocketServer(server: SocketIOServer | null): void {
     socketServer.setServer(server);
 }
 
-export function getSocketServer(): SocketIOServer | null {
-    return socketServer.getServer();
+/**
+ * Socket.io 서버 인스턴스 가져오기 (비동기)
+ * 없으면 자동 초기화 시도
+ */
+export async function getSocketServer(): Promise<SocketIOServer | null> {
+    return await socketServer.getServer();
+}
+
+/**
+ * Socket.io 서버 인스턴스 가져오기 (동기, 호환성 유지)
+ */
+export function getSocketServerSync(): SocketIOServer | null {
+    return socketServer.getServerSync();
 }
 
 /**
