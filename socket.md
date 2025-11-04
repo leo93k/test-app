@@ -347,6 +347,196 @@ targetSockets.forEach((socket) => {
     - 클라이언트가 연결을 해제하면 `disconnect` 이벤트 발생
     - 서버에서 해당 클라이언트의 리스너 자동 정리
 
+## Namespace, Room, Session 구조
+
+### Namespace
+
+**Socket.io Namespace**: 연결을 논리적으로 분리하는 최상위 단위입니다.
+
+**현재 구조:**
+
+-   **Namespace 개수**: 1개 (기본 namespace `/`)
+-   **Path 설정**: `/api/socket.io` (path는 namespace가 아님)
+-   **설정 위치**: `service/socket.ts` (93-102번 줄)
+
+```typescript
+// service/socket.ts
+const io = new SocketIOServerImpl(httpServer, {
+    path: "/api/socket.io", // Socket.io path (namespace가 아님)
+    // namespace는 기본 "/" 사용
+});
+```
+
+**특징:**
+
+-   현재는 기본 namespace만 사용 (커스텀 namespace 없음)
+-   모든 클라이언트가 같은 namespace에 연결됨
+-   필요 시 `io.of("/custom")` 형태로 커스텀 namespace 추가 가능
+
+### Room
+
+**Socket.io Room**: Namespace 내에서 소켓들을 그룹화하는 단위입니다.
+
+**현재 구조:**
+
+-   **Room 이름**: `sessionId`를 사용 (예: `client-123-abc`)
+-   **Room 추가**: `socket.join(sessionId)` (서버에서 자동)
+-   **설정 위치**: `service/socket.ts` (123번 줄)
+
+```typescript
+// service/socket.ts
+socket.on(SOCKET_EVENTS.JOIN_SESSION, (sessionId: string) => {
+    socket.data.sessionId = sessionId;
+    socket.join(sessionId); // sessionId를 room 이름으로 사용
+});
+```
+
+**Room 사용 목적:**
+
+-   같은 `sessionId`를 가진 소켓들을 그룹화
+-   세션별로 메시지를 효율적으로 전송하기 위해 준비됨
+-   현재는 Room에 추가만 하고, 실제 emit은 아직 fetchSockets 방식 사용
+
+**Room 활용 (향후 개선 가능):**
+
+```typescript
+// 현재 방식 (fetchSockets + 필터링)
+const sockets = await io.fetchSockets();
+const targetSockets = sockets.filter(
+    socket => socket.data?.sessionId === this.sessionId
+);
+targetSockets.forEach(socket => socket.emit(...));
+
+// Room 사용 시 (더 효율적)
+io.to(sessionId).emit(SOCKET_EVENTS.LOG, logData);
+```
+
+### Session (sessionId)
+
+**Session**: 애플리케이션 레벨에서 클라이언트를 식별하는 고유 ID입니다.
+
+**Session 생성:**
+
+-   **위치**: `lib/hooks/useSocket.ts` (18-26번 줄)
+-   **형식**: `client-${Date.now()}-${random}`
+-   **생성 시점**: 컴포넌트 마운트 시 자동 생성
+
+```typescript
+// lib/hooks/useSocket.ts
+const [sessionId, setSessionId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+        return `client-${Date.now()}-${Math.random()
+            .toString(36)
+            .substr(2, 9)}`;
+    }
+    return "";
+});
+```
+
+**Session 등록 (클라이언트 → 서버):**
+
+1. **위치**: `lib/utils/socketInit.ts` (33, 46번 줄)
+2. **이벤트**: `join-session`
+3. **전송 시점**: API 호출 전에 `ensureSocketInitialized(sessionId)` 호출
+
+```typescript
+// lib/utils/socketInit.ts
+socket.emit(SOCKET_EVENTS.JOIN_SESSION, sessionId);
+```
+
+**Session 저장 (서버):**
+
+1. **위치**: `service/socket.ts` (120-127번 줄)
+2. **저장 위치**: `socket.data.sessionId`
+3. **Room 추가**: `socket.join(sessionId)`
+
+```typescript
+// service/socket.ts
+socket.on(SOCKET_EVENTS.JOIN_SESSION, (sessionId: string) => {
+    socket.data.sessionId = sessionId; // 소켓에 sessionId 저장
+    socket.join(sessionId); // sessionId를 room 이름으로 사용
+});
+```
+
+**Session별 메시지 전송 (서버 → 클라이언트):**
+
+1. **위치**: `service/logger.ts` (57-82번 줄)
+2. **방식**: `fetchSockets()` + 필터링 (향후 Room 방식으로 개선 가능)
+
+```typescript
+// service/logger.ts
+// 1. 모든 소켓 가져오기
+const sockets = await io.fetchSockets();
+
+// 2. sessionId로 필터링
+const targetSockets = sockets.filter(
+    (socket) => socket.data?.sessionId === this.sessionId
+);
+
+// 3. 필터링된 소켓들에만 emit
+targetSockets.forEach((socket) => {
+    socket.emit(SOCKET_EVENTS.LOG, logData);
+});
+```
+
+### 구조 관계
+
+```
+Namespace (/)
+  └── Room (sessionId: "client-123-abc")
+        ├── Socket (socket.id: "abc123")
+        └── Socket (socket.id: "def456")  // 같은 세션의 여러 탭
+  └── Room (sessionId: "client-456-def")
+        └── Socket (socket.id: "ghi789")
+```
+
+**설명:**
+
+-   **Namespace**: 모든 연결이 같은 namespace에 속함
+-   **Room**: `sessionId`를 room 이름으로 사용하여 같은 세션의 소켓들을 그룹화
+-   **Session**: 애플리케이션 레벨 식별자로, 여러 소켓이 같은 sessionId를 가질 수 있음 (여러 탭)
+
+### 세션별 메시지 전송 흐름
+
+```
+1. 클라이언트: sessionId 생성 ("client-123-abc")
+   ↓
+2. 클라이언트: socket.emit("join-session", "client-123-abc")
+   ↓
+3. 서버: socket.data.sessionId = "client-123-abc" 저장
+   ↓
+4. 서버: socket.join("client-123-abc")  // Room에 추가
+   ↓
+5. 서버: Logger.getInstance("client-123-abc")
+   ↓
+6. 서버: io.fetchSockets() → socket.data.sessionId === "client-123-abc" 필터링
+   ↓
+7. 서버: 필터링된 소켓들에 socket.emit("log", logData)
+   ↓
+8. 클라이언트: socket.on("log", handleLog) → Redux에 저장
+```
+
+### 향후 개선 방향
+
+**Room 방식으로 전환 (더 효율적):**
+
+```typescript
+// 현재: fetchSockets + 필터링
+const sockets = await io.fetchSockets();
+const targetSockets = sockets.filter(...);
+targetSockets.forEach(socket => socket.emit(...));
+
+// 개선: Room 사용
+io.to(sessionId).emit(SOCKET_EVENTS.LOG, logData);
+// 한 줄로 해당 room의 모든 소켓에 emit
+```
+
+**장점:**
+
+-   더 효율적 (모든 소켓을 가져올 필요 없음)
+-   코드가 간결해짐
+-   Socket.io의 내장 기능 활용
+
 ## 이벤트 타입
 
 ### `join-session` 이벤트
