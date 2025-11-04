@@ -125,14 +125,27 @@ export default async function handler(
         }
 
         // 서로이웃 추가 모드인 경우
-        const friendRequestStatus = await executeFriendRequestProcess(
-            page,
-            logger,
-            username,
-            password,
-            message,
-            url
-        );
+        let friendRequestStatus:
+            | "success"
+            | "already-friend"
+            | "already-requesting"
+            | "failed";
+        let friendRequestError: string | undefined;
+
+        try {
+            friendRequestStatus = await executeFriendRequestProcess(
+                page,
+                logger,
+                username,
+                password,
+                message,
+                url
+            );
+        } catch (error) {
+            friendRequestStatus = "failed";
+            friendRequestError =
+                error instanceof Error ? error.message : "알 수 없는 오류";
+        }
 
         // 성공하면 브라우저 닫기
         if (browser) {
@@ -145,9 +158,21 @@ export default async function handler(
             }
         }
 
+        // status가 "failed"인 경우 에러 메시지와 함께 반환
+        if (friendRequestStatus === "failed") {
+            return res.status(200).json({
+                success: false,
+                status: friendRequestStatus,
+                error: friendRequestError || "서로이웃 추가에 실패했습니다.",
+                data: {
+                    browserKeptOpen: false,
+                },
+            });
+        }
+
         return res.status(200).json({
             success: true,
-            status: friendRequestStatus, // "success" | "already-friend" | "already-requesting" | "failed"
+            status: friendRequestStatus, // "success" | "already-friend" | "already-requesting"
             data: {
                 browserKeptOpen: false,
             },

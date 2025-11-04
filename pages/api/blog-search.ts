@@ -253,7 +253,7 @@ export default async function handler(
                         ${parseStructuredBlogItems.toString()}
                     `;
 
-                    const naverResults = await page.evaluate(
+                    const evaluateResult = await page.evaluate(
                         (args: {
                             selectors: {
                                 container: string[];
@@ -262,20 +262,62 @@ export default async function handler(
                                 author: string[];
                             };
                             functionsCode: string;
-                        }): BlogSearchResult[] => {
+                        }): {
+                            results: BlogSearchResult[];
+                            debugInfo: {
+                                containerSelectors: {
+                                    selector: string;
+                                    found: boolean;
+                                    count: number;
+                                }[];
+                                pageTitle: string;
+                                url: string;
+                                bodyContent: string;
+                                sampleHTML: string;
+                            };
+                        } => {
                             // 함수 코드를 실행하여 함수들을 정의
                             eval(args.functionsCode);
+
+                            // 디버깅 정보 수집
+                            const debugInfo = {
+                                containerSelectors: [] as {
+                                    selector: string;
+                                    found: boolean;
+                                    count: number;
+                                }[],
+                                pageTitle: document.title,
+                                url: window.location.href,
+                                bodyContent:
+                                    document.body?.innerText?.substring(
+                                        0,
+                                        500
+                                    ) || "",
+                                sampleHTML:
+                                    document.body?.innerHTML?.substring(
+                                        0,
+                                        1000
+                                    ) || "",
+                            };
 
                             // 다양한 가능한 셀렉터 시도
                             const possibleSelectors = args.selectors.container;
 
                             let blogItems: NodeListOf<Element> | null = null;
 
-                            // 다양한 셀렉터 시도
+                            // 다양한 셀렉터 시도 및 디버깅 정보 수집
                             for (const selector of possibleSelectors) {
                                 const items =
                                     document.querySelectorAll(selector);
-                                if (items.length > 0) {
+                                const found = items.length > 0;
+
+                                debugInfo.containerSelectors.push({
+                                    selector,
+                                    found,
+                                    count: items.length,
+                                });
+
+                                if (found && !blogItems) {
                                     blogItems = items;
                                     break;
                                 }
@@ -283,15 +325,26 @@ export default async function handler(
 
                             // 셀렉터로 블로그 아이템을 찾지 못한 경우
                             if (!blogItems) {
-                                return [];
+                                return {
+                                    results: [],
+                                    debugInfo,
+                                };
                             }
 
                             // 정상 방법: 구조화된 블로그 아이템 파싱
-                            return parseStructuredBlogItems(blogItems, {
-                                title: args.selectors.title,
-                                description: args.selectors.description,
-                                author: args.selectors.author,
-                            });
+                            const results = parseStructuredBlogItems(
+                                blogItems,
+                                {
+                                    title: args.selectors.title,
+                                    description: args.selectors.description,
+                                    author: args.selectors.author,
+                                }
+                            );
+
+                            return {
+                                results,
+                                debugInfo,
+                            };
                         },
                         {
                             selectors: {
@@ -304,6 +357,9 @@ export default async function handler(
                         }
                     );
 
+                    const naverResults = evaluateResult.results;
+                    const debugInfo = evaluateResult.debugInfo;
+
                     // 결과 로깅
                     if (naverResults.length > 0) {
                         await logger.info(
@@ -313,10 +369,53 @@ export default async function handler(
 
                     await page.close();
 
-                    // 결과가 없을 때 디버깅 정보 추가
+                    // 결과가 없을 때 상세한 디버깅 정보 추가
                     if (naverResults.length === 0) {
+                        // 실패 사유 분석
+                        const foundSelectors =
+                            debugInfo.containerSelectors.filter((s) => s.found);
+
+                        let failureReason = "";
+                        const reasons: string[] = [];
+
+                        if (foundSelectors.length === 0) {
+                            reasons.push(
+                                `❌ 컨테이너 셀렉터 실패: 시도한 모든 셀렉터(${blogItemContainerSelectors.length}개)에서 요소를 찾지 못했습니다.`
+                            );
+                            reasons.push(
+                                `시도한 셀렉터: ${blogItemContainerSelectors.join(
+                                    ", "
+                                )}`
+                            );
+                        } else {
+                            reasons.push(
+                                `⚠️ 컨테이너는 찾았지만 결과 파싱 실패: ${foundSelectors.length}개 셀렉터에서 요소를 찾았지만 블로그 아이템을 파싱하지 못했습니다.`
+                            );
+                            reasons.push(
+                                `성공한 셀렉터: ${foundSelectors
+                                    .map((s) => `${s.selector} (${s.count}개)`)
+                                    .join(", ")}`
+                            );
+                        }
+
+                        // 페이지 정보 추가
+                        reasons.push(`페이지 제목: ${debugInfo.pageTitle}`);
+                        reasons.push(`페이지 URL: ${debugInfo.url}`);
+
+                        // 페이지 내용 샘플 (보안을 위해 제한)
+                        if (debugInfo.bodyContent) {
+                            reasons.push(
+                                `페이지 내용 샘플: ${debugInfo.bodyContent.substring(
+                                    0,
+                                    200
+                                )}...`
+                            );
+                        }
+
+                        failureReason = reasons.join("\n");
+
                         await logger.error(
-                            `⚠️ 페이지 ${pageNo}에서 결과를 찾을 수 없습니다. 다시 시도해주세요.`
+                            `⚠️ 페이지 ${pageNo}에서 결과를 찾을 수 없습니다.\n${failureReason}`
                         );
                     } else {
                         await logger.success(

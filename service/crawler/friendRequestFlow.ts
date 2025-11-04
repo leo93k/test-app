@@ -667,10 +667,17 @@ export async function executeFriendRequestProcess(
             errorMessage.includes("서로이웃 신청을 받지 않는 이웃입니다") ||
             errorMessage.includes("신청을 받지 않는 이웃")
         ) {
-            await logger.error("❌ 서로이웃 신청을 받지 않는 이웃입니다.");
-            return "failed";
+            const errorMsg = "서로이웃 신청을 받지 않는 이웃입니다.";
+            throw new Error(errorMsg);
         }
     } catch (error) {
+        // 특정 에러 메시지인 경우 재throw
+        if (
+            error instanceof Error &&
+            error.message.includes("서로이웃 신청을 받지 않는")
+        ) {
+            throw error;
+        }
         // 에러 메시지 확인 실패는 무시하고 계속 진행
         await logger.info("ℹ️ 에러 메시지 확인 중 오류 발생, 계속 진행합니다.");
     }
@@ -690,10 +697,17 @@ export async function executeFriendRequestProcess(
             errorMessage.includes("서로이웃 신청을 받지 않는 이웃입니다") ||
             errorMessage.includes("신청을 받지 않는 이웃")
         ) {
-            await logger.error("❌ 서로이웃 신청을 받지 않는 이웃입니다.");
-            return "failed";
+            const errorMsg = "서로이웃 신청을 받지 않는 이웃입니다.";
+            throw new Error(errorMsg);
         }
     } catch (error) {
+        // 특정 에러 메시지인 경우 재throw
+        if (
+            error instanceof Error &&
+            error.message.includes("서로이웃 신청을 받지 않는")
+        ) {
+            throw error;
+        }
         // 에러 메시지 확인 실패는 무시하고 계속 진행
         await logger.info("ℹ️ 에러 메시지 확인 중 오류 발생, 계속 진행합니다.");
     }

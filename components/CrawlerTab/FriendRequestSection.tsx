@@ -99,11 +99,16 @@ export default function FriendRequestSection({
     const [blogStatuses, setBlogStatuses] = useState<Map<string, BlogStatus>>(
         new Map()
     );
+    // 각 블로그의 에러 메시지 추적
+    const [blogErrors, setBlogErrors] = useState<Map<string, string>>(
+        new Map()
+    );
 
     // friendRequestTargets가 변경될 때 상태 초기화
     useEffect(() => {
         if (friendRequestTargets.length === 0) {
             setBlogStatuses(new Map());
+            setBlogErrors(new Map());
         }
     }, [friendRequestTargets.length]);
 
@@ -337,6 +342,11 @@ export default function FriendRequestSection({
                         newStatuses.set(blog.url, "failed");
                         return newStatuses;
                     });
+                    setBlogErrors((prev) => {
+                        const newErrors = new Map(prev);
+                        newErrors.set(blog.url, "중지됨");
+                        return newErrors;
+                    });
                     return {
                         success: false,
                         blog,
@@ -382,6 +392,11 @@ export default function FriendRequestSection({
                             newStatuses.set(blog.url, "failed");
                             return newStatuses;
                         });
+                        setBlogErrors((prev) => {
+                            const newErrors = new Map(prev);
+                            newErrors.set(blog.url, "중지됨");
+                            return newErrors;
+                        });
                         return {
                             success: false,
                             blog,
@@ -405,12 +420,46 @@ export default function FriendRequestSection({
                             newStatuses.set(blog.url, status as BlogStatus);
                             return newStatuses;
                         });
+                        setBlogErrors((prev) => {
+                            const newErrors = new Map(prev);
+                            newErrors.set(blog.url, errorMessage);
+                            return newErrors;
+                        });
                         throw new Error(errorMessage);
                     }
 
                     // API 응답에서 status 추출
                     const status =
                         data.status || (data.success ? "success" : "failed");
+
+                    // status가 "failed"이거나 success가 false인 경우 에러 처리
+                    if (status === "failed" || !data.success) {
+                        const errorMessage =
+                            data.error || "서로이웃 추가에 실패했습니다.";
+                        setBlogStatuses((prev) => {
+                            const newStatuses = new Map(prev);
+                            newStatuses.set(blog.url, "failed");
+                            return newStatuses;
+                        });
+                        setBlogErrors((prev) => {
+                            const newErrors = new Map(prev);
+                            newErrors.set(blog.url, errorMessage);
+                            return newErrors;
+                        });
+                        await logger.error(
+                            `❌ 블로그 ${
+                                index + 1
+                            } 서로이웃 추가 실패: ${errorMessage}`
+                        );
+                        return {
+                            success: false,
+                            blog,
+                            index,
+                            error: errorMessage,
+                            status: "failed" as const,
+                        };
+                    }
+
                     setBlogStatuses((prev) => {
                         const newStatuses = new Map(prev);
                         newStatuses.set(blog.url, status as BlogStatus);
@@ -439,6 +488,11 @@ export default function FriendRequestSection({
                             newStatuses.set(blog.url, "failed");
                             return newStatuses;
                         });
+                        setBlogErrors((prev) => {
+                            const newErrors = new Map(prev);
+                            newErrors.set(blog.url, "중지됨");
+                            return newErrors;
+                        });
                         return {
                             success: false,
                             blog,
@@ -456,6 +510,11 @@ export default function FriendRequestSection({
                         const newStatuses = new Map(prev);
                         newStatuses.set(blog.url, "failed");
                         return newStatuses;
+                    });
+                    setBlogErrors((prev) => {
+                        const newErrors = new Map(prev);
+                        newErrors.set(blog.url, errorMessage);
+                        return newErrors;
                     });
                     await logger.error(
                         `❌ 블로그 ${
@@ -505,35 +564,13 @@ export default function FriendRequestSection({
                 .filter((title) => title !== null)
                 .join(", ");
 
-            // 실패한 블로그 리스트
-            const failList = failResults
-                .map((r) => {
-                    if (r.status === "fulfilled" && r.value) {
-                        return `${r.value.blog?.title || "알 수 없음"} (${
-                            r.value.error || "알 수 없는 오류"
-                        })`;
-                    } else if (r.status === "rejected") {
-                        return `알 수 없음 (${
-                            r.reason?.message || "알 수 없는 오류"
-                        })`;
-                    }
-                    return null;
-                })
-                .filter((item) => item !== null)
-                .join(", ");
-
-            await logger.success(
+            await logger.info(
                 `🎉 서로이웃 추가 완료! 성공: ${successCount}개, 실패: ${failCount}개`
             );
 
             // 성공한 블로그 리스트 출력
             if (successList) {
                 await logger.success(`✅ 성공한 블로그: ${successList}`);
-            }
-
-            // 실패한 블로그 리스트 출력
-            if (failList) {
-                await logger.error(`❌ 실패한 블로그: ${failList}`);
             }
         } catch (err) {
             // 중지된 경우에는 에러 표시하지 않음
@@ -1220,28 +1257,42 @@ export default function FriendRequestSection({
                                                 <AccordionContent>
                                                     <div className="max-h-48 overflow-y-auto space-y-1.5 pr-2">
                                                         {blogsByStatus.failed.map(
-                                                            (blog, index) => (
-                                                                <div
-                                                                    key={index}
-                                                                    className="flex items-center justify-between p-2 rounded bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800"
-                                                                >
-                                                                    <a
-                                                                        href={
-                                                                            blog.url
+                                                            (blog, index) => {
+                                                                const errorMessage =
+                                                                    blogErrors.get(
+                                                                        blog.url
+                                                                    ) ||
+                                                                    "알 수 없는 오류";
+                                                                return (
+                                                                    <div
+                                                                        key={
+                                                                            index
                                                                         }
-                                                                        target="_blank"
-                                                                        rel="noopener noreferrer"
-                                                                        className="text-xs text-red-700 dark:text-red-300 hover:underline truncate flex-1"
-                                                                        title={
-                                                                            blog.title
-                                                                        }
+                                                                        className="flex flex-col gap-1 p-2 rounded bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800"
                                                                     >
-                                                                        {
-                                                                            blog.title
-                                                                        }
-                                                                    </a>
-                                                                </div>
-                                                            )
+                                                                        <a
+                                                                            href={
+                                                                                blog.url
+                                                                            }
+                                                                            target="_blank"
+                                                                            rel="noopener noreferrer"
+                                                                            className="text-xs text-red-700 dark:text-red-300 hover:underline truncate"
+                                                                            title={
+                                                                                blog.title
+                                                                            }
+                                                                        >
+                                                                            {
+                                                                                blog.title
+                                                                            }
+                                                                        </a>
+                                                                        <div className="text-xs text-red-600 dark:text-red-400 opacity-75 line-clamp-2">
+                                                                            {
+                                                                                errorMessage
+                                                                            }
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            }
                                                         )}
                                                     </div>
                                                 </AccordionContent>
