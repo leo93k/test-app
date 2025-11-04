@@ -3,6 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { socketClient } from "../../lib/socket";
 import { useAppDispatch } from "../hooks";
 import { addLog } from "../../lib/store/logsSlice";
+import { store } from "../../lib/store";
+
+// 전역 리스너 등록 플래그 (소켓 리스너는 한 번만 등록되어야 함)
+let globalLogListenerRegistered = false;
+let globalUnsubscribeFn: (() => void) | null = null;
 
 export function useSocket() {
     const dispatch = useAppDispatch();
@@ -26,7 +31,7 @@ export function useSocket() {
         // sessionId의 최신 값을 ref에 동기화
         sessionIdRef.current = sessionId;
 
-        // 소켓 리스너 등록 함수
+        // 소켓 리스너 등록 함수 (전역적으로 한 번만 등록)
         const setupSocketListeners = () => {
             // 소켓이 이미 생성되어 있으면 리스너 등록
             const socket = socketClient.getSocket();
@@ -36,10 +41,13 @@ export function useSocket() {
                 return false;
             }
 
-            // 이미 리스너가 등록되어 있는지 확인 (중복 방지)
-            // 소켓에 이미 리스너가 등록되어 있으면 재등록하지 않음
-            // unsubscribeRef가 있으면 이미 등록된 것
-            if (unsubscribeRef.current) {
+            // 전역 리스너가 이미 등록되어 있으면 상태만 업데이트
+            if (globalLogListenerRegistered) {
+                // 소켓이 이미 연결되어 있으면 상태 업데이트
+                if (socket.connected) {
+                    setIsConnected(true);
+                    setSocketId(socket.id || null);
+                }
                 return true;
             }
 
@@ -49,7 +57,7 @@ export function useSocket() {
                 setSocketId(socket.id || null);
             }
 
-            // 연결 상태 리스너
+            // 연결 상태 리스너 (각 컴포넌트마다 상태 업데이트 필요)
             const handleConnect = () => {
                 console.log("✅ Socket connected:", socket.id);
                 setIsConnected(true);
@@ -74,7 +82,7 @@ export function useSocket() {
                 setSocketId(socket.id || null);
             };
 
-            // 로그 수신 리스너
+            // 로그 수신 리스너 (전역적으로 한 번만 등록)
             const handleLog = (data: {
                 message: string;
                 type: string;
@@ -82,7 +90,8 @@ export function useSocket() {
             }) => {
                 console.log("📨 Log received via WebSocket:", data);
                 console.log("📦 Dispatching to Redux...");
-                dispatch(
+                // Redux store에 직접 dispatch (전역적으로 한 번만 등록되므로 store 직접 사용)
+                store.dispatch(
                     addLog({
                         message: data.message,
                         type: data.type as "info" | "success" | "error",
@@ -98,15 +107,23 @@ export function useSocket() {
             socket.on("reconnect", handleReconnect);
             socket.on("log", handleLog);
 
-            console.log("✅ Log listener registered on socket");
+            console.log("✅ Log listener registered on socket (global)");
 
-            unsubscribeRef.current = () => {
+            // 전역 리스너 등록 플래그 설정
+            globalLogListenerRegistered = true;
+
+            // 전역 unsubscribe 함수 저장
+            globalUnsubscribeFn = () => {
                 socket.off("log", handleLog);
                 socket.off("connect", handleConnect);
                 socket.off("disconnect", handleDisconnect);
                 socket.off("connect_error", handleConnectError);
                 socket.off("reconnect", handleReconnect);
+                globalLogListenerRegistered = false;
+                globalUnsubscribeFn = null;
             };
+
+            unsubscribeRef.current = globalUnsubscribeFn;
 
             return true;
         };
@@ -117,18 +134,17 @@ export function useSocket() {
         // 소켓이 API 호출 후 생성될 수 있으므로 주기적으로 확인
         const interval = setInterval(() => {
             const socket = socketClient.getSocket();
-            if (socket && !unsubscribeRef.current) {
+            if (socket && !globalLogListenerRegistered) {
                 setupSocketListeners();
             }
         }, 1000);
 
         return () => {
             clearInterval(interval);
-            if (unsubscribeRef.current) {
-                unsubscribeRef.current();
-                unsubscribeRef.current = null;
-            }
-            // disconnectSocket은 여러 컴포넌트에서 사용할 수 있으므로 여기서는 하지 않음
+            // 전역 리스너는 모든 컴포넌트가 언마운트될 때까지 유지되어야 함
+            // 각 컴포넌트의 cleanup에서는 전역 리스너를 제거하지 않음
+            // (다른 컴포넌트가 여전히 사용 중일 수 있음)
+            unsubscribeRef.current = null;
         };
     }, [dispatch, sessionId]);
 
