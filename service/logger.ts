@@ -6,7 +6,8 @@ export const MAX_LOGS = 100;
 
 // Logger 클래스
 export class Logger {
-    private static instance: Logger;
+    // sessionId별 Logger 인스턴스 관리 (Map 방식으로 변경)
+    private static instances: Map<string, Logger> = new Map();
     private sessionId: string;
 
     private constructor(sessionId: string) {
@@ -14,13 +15,25 @@ export class Logger {
     }
 
     public static getInstance(sessionId: string): Logger {
-        if (!Logger.instance) {
-            Logger.instance = new Logger(sessionId);
-        } else {
-            // 기존 인스턴스가 있으면 sessionId 업데이트
-            Logger.instance.sessionId = sessionId;
+        // 이미 해당 sessionId의 Logger가 있으면 재사용
+        if (Logger.instances.has(sessionId)) {
+            return Logger.instances.get(sessionId)!;
         }
-        return Logger.instance;
+
+        // 새 Logger 인스턴스 생성
+        const logger = new Logger(sessionId);
+        Logger.instances.set(sessionId, logger);
+        return logger;
+    }
+
+    // 특정 sessionId의 Logger 인스턴스 제거 (메모리 관리)
+    public static removeInstance(sessionId: string): void {
+        Logger.instances.delete(sessionId);
+    }
+
+    // 모든 Logger 인스턴스 제거
+    public static clearAll(): void {
+        Logger.instances.clear();
     }
 
     public async log(
@@ -43,8 +56,12 @@ export class Logger {
                     // 해당 sessionId를 가진 소켓만 찾아서 전송
                     const sockets = await io.fetchSockets();
                     const targetSockets = sockets.filter(
-                        (socket: any) =>
-                            socket.data?.sessionId === this.sessionId
+                        (socket: {
+                            data?: { sessionId?: string };
+                            emit: (event: string, data: unknown) => void;
+                        }) =>
+                            (socket.data as { sessionId?: string })
+                                ?.sessionId === this.sessionId
                     );
 
                     if (targetSockets.length > 0) {
@@ -55,9 +72,13 @@ export class Logger {
                         };
 
                         // 해당 세션의 소켓들에만 전송
-                        targetSockets.forEach((socket: any) => {
-                            socket.emit("log", logData);
-                        });
+                        targetSockets.forEach(
+                            (socket: {
+                                emit: (event: string, data: unknown) => void;
+                            }) => {
+                                socket.emit("log", logData);
+                            }
+                        );
                     }
                 } else {
                     // Socket.io 서버 초기화 실패 (HTTP 서버 인스턴스가 없음)

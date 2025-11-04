@@ -9,6 +9,7 @@ import {
     blogDescriptionSelectors,
     blogAuthorSelectors,
 } from "@/const/selectors";
+import { NAVER_BLOG_SEARCH_URL } from "@/const";
 
 interface BlogSearchResult {
     title: string;
@@ -36,6 +37,14 @@ export default async function handler(
     // Socket.io 서버 초기화 (로그 전송을 위해)
     await initializeSocketServer(res.socket.server);
 
+    // 요청이 중단되었는지 확인하는 플래그
+    let isAborted = false;
+
+    // 요청 중단 감지 (클라이언트가 연결을 끊으면 req.destroyed가 true가 됨)
+    req.on("close", () => {
+        isAborted = true;
+    });
+
     try {
         const { keyword, pageNumbers = [1, 2, 3, 4, 5], sessionId } = req.body;
 
@@ -43,10 +52,13 @@ export default async function handler(
             return res.status(400).json({ error: "키워드가 필요합니다." });
         }
 
-        // Logger 인스턴스 생성 (클라이언트에서 전송한 sessionId 사용, 없으면 생성)
-        const loggerSessionId =
-            sessionId || `blog-search-${keyword}-${Date.now()}`;
-        const logger = Logger.getInstance(loggerSessionId);
+        // Logger 인스턴스 생성 (클라이언트에서 전송한 sessionId 필수 사용)
+        if (!sessionId) {
+            return res.status(400).json({
+                error: "sessionId가 필요합니다. 클라이언트에서 sessionId를 전송해주세요.",
+            });
+        }
+        const logger = Logger.getInstance(sessionId);
 
         const browser = await chromium.launch({
             headless: true,
@@ -64,9 +76,15 @@ export default async function handler(
                 `네이버 블로그 검색 시작: "${keyword}" - ${pageNumbers.length}개 페이지 병렬 처리`
             );
 
-            const blogUrl = `https://section.blog.naver.com/Search/Blog.naver`;
-
             const searchPromises = pageNumbers.map(async (pageNo: number) => {
+                // 중지되었는지 확인
+                if (isAborted) {
+                    await logger.info(
+                        `검색이 중지되어 페이지 ${pageNo} 처리를 건너뜁니다.`
+                    );
+                    return [];
+                }
+
                 try {
                     const page = await context.newPage();
 
@@ -76,11 +94,61 @@ export default async function handler(
                     query.orderBy = "sim";
                     query.keyword = keyword;
 
-                    const naverUrl = `${blogUrl}?${new URLSearchParams(
+                    const naverUrl = `${NAVER_BLOG_SEARCH_URL}?${new URLSearchParams(
                         query
                     ).toString()}`;
 
-                    await page.goto(naverUrl, { waitUntil: "networkidle" });
+                    // 중지되었는지 확인
+                    if (isAborted) {
+                        await page.close();
+                        await logger.info(
+                            `검색이 중지되어 페이지 ${pageNo} 처리를 중단합니다.`
+                        );
+                        return [];
+                    }
+
+                    // 페이지 로드 (타임아웃 시간 증가 및 fallback 옵션)
+                    try {
+                        await page.goto(naverUrl, {
+                            waitUntil: "networkidle",
+                            timeout: 60000, // 60초로 증가
+                        });
+                    } catch {
+                        // networkidle 타임아웃 시 load 상태로 재시도
+                        await logger.info(
+                            `네트워크 유휴 상태 대기 실패, load 상태로 재시도 중... (페이지 ${pageNo})`
+                        );
+                        try {
+                            await page.goto(naverUrl, {
+                                waitUntil: "load",
+                                timeout: 60000,
+                            });
+                            await logger.info(
+                                `페이지 ${pageNo} 로드 완료 (load 상태)`
+                            );
+                        } catch {
+                            // load도 실패하면 domcontentloaded로 재시도
+                            await logger.info(
+                                `load 상태 대기 실패, domcontentloaded로 재시도 중... (페이지 ${pageNo})`
+                            );
+                            await page.goto(naverUrl, {
+                                waitUntil: "domcontentloaded",
+                                timeout: 60000,
+                            });
+                            await logger.info(
+                                `페이지 ${pageNo} 로드 완료 (domcontentloaded 상태)`
+                            );
+                        }
+                    }
+
+                    // 중지되었는지 다시 확인
+                    if (isAborted) {
+                        await page.close();
+                        await logger.info(
+                            `검색이 중지되어 페이지 ${pageNo} 처리를 중단합니다.`
+                        );
+                        return [];
+                    }
 
                     // 디버깅을 위해 페이지 제목과 URL 확인
                     const pageTitle = await page.title();
@@ -100,14 +168,12 @@ export default async function handler(
                             const possibleSelectors = selectors.container;
 
                             let blogItems: NodeListOf<Element> | null = null;
-                            let usedSelector = "";
 
                             for (const selector of possibleSelectors) {
                                 const items =
                                     document.querySelectorAll(selector);
                                 if (items.length > 0) {
                                     blogItems = items;
-                                    usedSelector = selector;
                                     break;
                                 }
                             }
@@ -223,6 +289,18 @@ export default async function handler(
             allResults.push(...allNaverResults.flat());
             await browser.close();
 
+            // 중지되었는지 확인
+            if (isAborted) {
+                await logger.info("검색이 중지되었습니다.");
+                return res.status(499).json({
+                    success: false,
+                    error: "검색이 중지되었습니다.",
+                    results: allResults,
+                    keyword,
+                    totalCount: allResults.length,
+                });
+            }
+
             await logger.success(
                 `블로그 검색 완료: 총 ${allResults.length}개 결과 수집 (키워드: ${keyword})`
             );
@@ -238,10 +316,14 @@ export default async function handler(
             throw error;
         }
     } catch (error) {
-        // 에러 발생 시에도 Logger 사용 시도 (세션이 없을 수 있음)
+        // 에러 발생 시에도 Logger 사용 시도 (sessionId가 있으면 사용)
         try {
-            const sessionId = `blog-search-error-${Date.now()}`;
-            const logger = Logger.getInstance(sessionId);
+            const errorSessionId =
+                req.body.sessionId ||
+                `error-${Date.now()}-${Math.random()
+                    .toString(36)
+                    .substr(2, 9)}`;
+            const logger = Logger.getInstance(errorSessionId);
             await logger.error(
                 `블로그 검색 오류: ${
                     error instanceof Error ? error.message : String(error)

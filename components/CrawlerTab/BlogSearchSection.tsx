@@ -7,6 +7,7 @@ interface BlogSearchSectionProps {
     friendRequestTargets: BlogSearchResult[];
     onSearch: (keyword: string, maxPage: number) => void;
     onAddToTargets: (result: BlogSearchResult) => void;
+    onCancel: () => void;
     searchLoading: boolean;
 }
 
@@ -15,6 +16,7 @@ export default function BlogSearchSection({
     friendRequestTargets,
     onSearch,
     onAddToTargets,
+    onCancel,
     searchLoading,
 }: BlogSearchSectionProps) {
     const [keyword, setKeyword] = useState("");
@@ -73,6 +75,14 @@ export default function BlogSearchSection({
                         >
                             {searchLoading ? "검색 중..." : "🔍 검색"}
                         </button>
+                        {searchLoading && (
+                            <button
+                                onClick={onCancel}
+                                className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
+                            >
+                                ⏹️ 중지
+                            </button>
+                        )}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                         1부터 입력한 숫자까지의 페이지를 검색합니다. (예: 3 입력

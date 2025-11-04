@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { ID, PASSWORD } from "@/const";
 import type { BlogSearchResult } from "./types";
 import type { TabType } from "./Tabs";
@@ -26,11 +26,23 @@ export default function CrawlerTab() {
     // Socket.io 연결 상태 확인
     const { isConnected, sessionId } = useSocket();
 
+    // AbortController를 ref로 관리하여 중지 기능 구현
+    const searchAbortControllerRef = useRef<AbortController | null>(null);
+
     const handleBlogSearch = async (keyword: string, maxPage: number) => {
         if (!keyword.trim()) {
             setError("검색할 키워드를 입력해주세요.");
             return;
         }
+
+        // 이전 요청이 있으면 취소
+        if (searchAbortControllerRef.current) {
+            searchAbortControllerRef.current.abort();
+        }
+
+        // 새로운 AbortController 생성
+        const abortController = new AbortController();
+        searchAbortControllerRef.current = abortController;
 
         setSearchLoading(true);
         setError("");
@@ -65,9 +77,20 @@ export default function CrawlerTab() {
                     ),
                     sessionId: sessionId, // useSocket에서 가져온 sessionId 사용
                 }),
+                signal: abortController.signal,
             });
 
+            // 중지되었는지 확인
+            if (abortController.signal.aborted) {
+                return;
+            }
+
             const data = await response.json();
+
+            // 중지되었는지 다시 확인
+            if (abortController.signal.aborted) {
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(data.error || "블로그 검색에 실패했습니다.");
@@ -77,13 +100,28 @@ export default function CrawlerTab() {
             setSearchResults(results);
             setFriendRequestTargets(results);
         } catch (err) {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : "알 수 없는 오류가 발생했습니다."
-            );
+            // AbortError는 사용자가 중지한 것이므로 에러로 표시하지 않음
+            if (err instanceof Error && err.name === "AbortError") {
+                setError("검색이 중지되었습니다.");
+            } else {
+                setError(
+                    err instanceof Error
+                        ? err.message
+                        : "알 수 없는 오류가 발생했습니다."
+                );
+            }
         } finally {
             setSearchLoading(false);
+            searchAbortControllerRef.current = null;
+        }
+    };
+
+    const handleCancelSearch = () => {
+        if (searchAbortControllerRef.current) {
+            searchAbortControllerRef.current.abort();
+            searchAbortControllerRef.current = null;
+            setSearchLoading(false);
+            setError("검색이 중지되었습니다.");
         }
     };
 
@@ -117,6 +155,7 @@ export default function CrawlerTab() {
                             friendRequestTargets={friendRequestTargets}
                             onSearch={handleBlogSearch}
                             onAddToTargets={handleAddToTargets}
+                            onCancel={handleCancelSearch}
                             searchLoading={searchLoading}
                         />
 

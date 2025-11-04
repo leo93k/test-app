@@ -12,10 +12,13 @@ function SocketConnectionStatus() {
 
     useEffect(() => {
         const checkConnection = async () => {
-            const { connectSocket } = await import("@/lib/socket");
-            const socket = connectSocket();
-            setActualConnected(socket.connected);
-            setActualSocketId(socket.id || null);
+            const { socketClient } = await import("@/lib/socket");
+            // connectSocket() 대신 getSocket()을 사용하여 불필요한 로그 출력 방지
+            const socket = socketClient.getSocket();
+            if (socket) {
+                setActualConnected(socket.connected);
+                setActualSocketId(socket.id || null);
+            }
         };
 
         // 초기 상태 확인
@@ -39,6 +42,7 @@ function SocketConnectionStatus() {
             socket.on("disconnect", updateStatus);
 
             // 주기적으로 상태 확인 (소켓 상태가 변경되었을 수 있으므로)
+            // getSocket()을 사용하여 불필요한 connectSocket() 호출 방지
             const interval = setInterval(checkConnection, 1000);
 
             return () => {
