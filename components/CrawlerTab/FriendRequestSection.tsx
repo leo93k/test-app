@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef } from "react";
 import { Logger } from "@/service/logger";
+import { useSocket } from "@/lib/hooks/useSocket";
 import type { BlogSearchResult } from "./types";
 
 interface FriendRequestSectionProps {
@@ -41,6 +42,9 @@ export default function FriendRequestSection({
     onError,
     onLoadingChange,
 }: FriendRequestSectionProps) {
+    // Socket.io 연결 상태 및 sessionId 가져오기
+    const { isConnected, sessionId } = useSocket();
+
     // 프로덕션 환경에서는 headless를 true로 고정
     const effectiveHeadless = isProduction ? true : headless;
     const [selectedMessageType, setSelectedMessageType] = useState("sample1");
@@ -95,11 +99,25 @@ export default function FriendRequestSection({
         onError("");
 
         try {
-            // 클라이언트별 고유한 sessionId 생성
-            const sessionId = `login-test-${Date.now()}-${Math.random()
-                .toString(36)
-                .substr(2, 9)}`;
-            const logger = Logger.getInstance("login-test");
+            // useSocket에서 생성한 sessionId 사용 (항상 생성되므로 null 체크만)
+            if (!sessionId) {
+                throw new Error(
+                    "Socket sessionId가 없습니다. 소켓 연결을 확인해주세요."
+                );
+            }
+
+            // 소켓에 join-session을 다시 보내서 확실히 등록 (이미 등록되어 있어도 문제없음)
+            const { connectSocket } = await import("@/lib/socket");
+            const socket = connectSocket();
+            if (socket.connected) {
+                socket.emit("join-session", sessionId);
+                console.log(`📤 Sent sessionId to server: ${sessionId}`);
+            }
+
+            // 약간의 지연 후 API 호출 (소켓 등록이 완료되도록)
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
+            const logger = Logger.getInstance(sessionId);
             const testBlog = friendRequestTargets[0];
 
             await logger.info(`🔐 로그인 테스트 시작: ${testBlog.title}`);
@@ -114,7 +132,7 @@ export default function FriendRequestSection({
                     username: username.trim(),
                     password: password.trim(),
                     headless: effectiveHeadless,
-                    sessionId: sessionId, // 클라이언트 sessionId 전송
+                    sessionId: sessionId, // useSocket에서 가져온 sessionId 사용
                 }),
                 signal,
             });
@@ -134,8 +152,10 @@ export default function FriendRequestSection({
         } catch (err) {
             // 중지된 경우에는 에러 표시하지 않음
             if (signal.aborted) {
-                const logger = Logger.getInstance("login-test");
-                await logger.info("⏸️ 로그인 테스트가 중지되었습니다.");
+                if (sessionId) {
+                    const logger = Logger.getInstance(sessionId);
+                    await logger.info("⏸️ 로그인 테스트가 중지되었습니다.");
+                }
                 return;
             }
 
@@ -145,8 +165,10 @@ export default function FriendRequestSection({
                     : "알 수 없는 오류가 발생했습니다.";
             onError(errorMessage);
 
-            const logger = Logger.getInstance("login-test");
-            await logger.error(`❌ 로그인 테스트 실패: ${errorMessage}`);
+            if (sessionId) {
+                const logger = Logger.getInstance(sessionId);
+                await logger.error(`❌ 로그인 테스트 실패: ${errorMessage}`);
+            }
         } finally {
             if (!signal.aborted) {
                 setLoginTestLoading(false);
@@ -180,10 +202,24 @@ export default function FriendRequestSection({
         onError("");
 
         try {
-            // 클라이언트별 고유한 sessionId 생성
-            const sessionId = `friend-request-${Date.now()}-${Math.random()
-                .toString(36)
-                .substr(2, 9)}`;
+            // useSocket에서 생성한 sessionId 사용 (항상 생성되므로 null 체크만)
+            if (!sessionId) {
+                throw new Error(
+                    "Socket sessionId가 없습니다. 소켓 연결을 확인해주세요."
+                );
+            }
+
+            // 소켓에 join-session을 다시 보내서 확실히 등록 (이미 등록되어 있어도 문제없음)
+            const { connectSocket } = await import("@/lib/socket");
+            const socket = connectSocket();
+            if (socket.connected) {
+                socket.emit("join-session", sessionId);
+                console.log(`📤 Sent sessionId to server: ${sessionId}`);
+            }
+
+            // 약간의 지연 후 API 호출 (소켓 등록이 완료되도록)
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
             const logger = Logger.getInstance(sessionId);
             await logger.info(
                 `🤝 ${friendRequestTargets.length}개 블로그에 서로이웃 추가 요청을 시작합니다...`

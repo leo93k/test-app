@@ -1,11 +1,113 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Logger } from "@/service/logger";
 import { useSocket } from "@/lib/hooks/useSocket";
+import type { Socket } from "socket.io-client";
+
+// 소켓 연결 상태를 실제로 확인하는 컴포넌트
+function SocketConnectionStatus() {
+    const { isConnected, socketId } = useSocket();
+    const [actualConnected, setActualConnected] = useState(false);
+    const [actualSocketId, setActualSocketId] = useState<string | null>(null);
+
+    useEffect(() => {
+        const checkConnection = async () => {
+            const { connectSocket } = await import("@/lib/socket");
+            const socket = connectSocket();
+            setActualConnected(socket.connected);
+            setActualSocketId(socket.id || null);
+        };
+
+        // 초기 상태 확인
+        checkConnection();
+
+        // 소켓 인스턴스 가져오기 및 이벤트 리스너 등록
+        let socket: Socket | null = null;
+        const initSocket = async () => {
+            const { connectSocket } = await import("@/lib/socket");
+            socket = connectSocket();
+
+            // 소켓 연결 상태 변경 시 업데이트
+            const updateStatus = () => {
+                if (socket) {
+                    setActualConnected(socket.connected);
+                    setActualSocketId(socket.id || null);
+                }
+            };
+
+            socket.on("connect", updateStatus);
+            socket.on("disconnect", updateStatus);
+
+            // 주기적으로 상태 확인 (소켓 상태가 변경되었을 수 있으므로)
+            const interval = setInterval(checkConnection, 1000);
+
+            return () => {
+                if (socket) {
+                    socket.off("connect", updateStatus);
+                    socket.off("disconnect", updateStatus);
+                }
+                clearInterval(interval);
+            };
+        };
+
+        let cleanup: (() => void) | undefined;
+        initSocket().then((cleanupFn) => {
+            cleanup = cleanupFn;
+        });
+
+        return () => {
+            if (cleanup) cleanup();
+        };
+    }, []);
+
+    // 실제 연결 상태와 훅 상태 중 실제 상태를 우선 사용
+    const connected = actualConnected || isConnected;
+    const displaySocketId = actualSocketId || socketId;
+
+    return (
+        <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                        <div
+                            className={`w-3 h-3 rounded-full ${
+                                connected
+                                    ? "bg-green-500 animate-pulse"
+                                    : "bg-red-500"
+                            }`}
+                        ></div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Socket.io 연결 상태:
+                        </span>
+                        <span
+                            className={`text-sm font-semibold ${
+                                connected
+                                    ? "text-green-600 dark:text-green-400"
+                                    : "text-red-600 dark:text-red-400"
+                            }`}
+                        >
+                            {connected ? "연결됨" : "연결 안됨"}
+                        </span>
+                    </div>
+                </div>
+                {connected && displaySocketId && (
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                            Socket ID:
+                        </span>
+                        <span className="text-xs font-mono bg-gray-200 dark:bg-gray-600 px-2 py-1 rounded text-gray-800 dark:text-gray-200">
+                            {displaySocketId}
+                        </span>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
 
 export default function LogTestSection() {
     const [apiTestLoading, setApiTestLoading] = useState(false);
-    const { isConnected, socketId, sessionId } = useSocket();
+    const { sessionId } = useSocket();
 
     // 로그 테스트 함수들
     const handleTestLog = async (type: "info" | "success" | "error") => {
@@ -32,10 +134,17 @@ export default function LogTestSection() {
             // 소켓에 join-session을 다시 보내서 확실히 등록 (이미 등록되어 있어도 문제없음)
             const { connectSocket } = await import("@/lib/socket");
             const socket = connectSocket();
-            if (socket.connected) {
-                socket.emit("join-session", sessionId);
-                console.log(`📤 Sent sessionId to server: ${sessionId}`);
+
+            // 실제 소켓 연결 상태 확인
+            const actuallyConnected = socket.connected;
+            if (!actuallyConnected) {
+                throw new Error(
+                    "소켓이 연결되지 않았습니다. 소켓 연결을 확인해주세요."
+                );
             }
+
+            socket.emit("join-session", sessionId);
+            console.log(`📤 Sent sessionId to server: ${sessionId}`);
 
             // 약간의 지연 후 테스트 로그 API 호출
             await new Promise((resolve) => setTimeout(resolve, 100));
@@ -75,43 +184,7 @@ export default function LogTestSection() {
             </h3>
 
             {/* Socket.io 연결 상태 표시 */}
-            <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2">
-                            <div
-                                className={`w-3 h-3 rounded-full ${
-                                    isConnected
-                                        ? "bg-green-500 animate-pulse"
-                                        : "bg-red-500"
-                                }`}
-                            ></div>
-                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                                Socket.io 연결 상태:
-                            </span>
-                            <span
-                                className={`text-sm font-semibold ${
-                                    isConnected
-                                        ? "text-green-600 dark:text-green-400"
-                                        : "text-red-600 dark:text-red-400"
-                                }`}
-                            >
-                                {isConnected ? "연결됨" : "연결 안됨"}
-                            </span>
-                        </div>
-                    </div>
-                    {isConnected && socketId && (
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
-                                Socket ID:
-                            </span>
-                            <span className="text-xs font-mono bg-gray-200 dark:bg-gray-600 px-2 py-1 rounded text-gray-800 dark:text-gray-200">
-                                {socketId}
-                            </span>
-                        </div>
-                    )}
-                </div>
-            </div>
+            <SocketConnectionStatus />
 
             {/* 클라이언트 로그 테스트 */}
             <div className="mb-4">

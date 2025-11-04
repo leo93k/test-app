@@ -40,21 +40,12 @@ export function useSocket() {
 
         const socket = connectSocket();
 
-        // 초기 연결 상태 설정
-        setIsConnected(socket.connected);
-        setSocketId(socket.id || null);
+        // 초기 연결 상태는 이벤트 리스너에서 처리
+        // 소켓이 이미 연결되어 있으면 connect 이벤트가 자동으로 발생하거나
+        // 다음 이벤트 루프에서 handleConnect가 호출됨
 
-        // sessionId가 없으면 생성 (이미 초기값으로 설정되어 있지만 안전장치)
-        if (!sessionId) {
-            const newSessionId = `client-${Date.now()}-${Math.random()
-                .toString(36)
-                .substr(2, 9)}`;
-            setSessionId(newSessionId);
-            sessionIdRef.current = newSessionId;
-        } else {
-            // sessionId의 최신 값을 ref에 동기화
-            sessionIdRef.current = sessionId;
-        }
+        // sessionId의 최신 값을 ref에 동기화
+        sessionIdRef.current = sessionId;
 
         // 소켓 연결 시 서버에 sessionId 전송하는 함수
         // sessionId를 최신 값으로 참조하기 위해 ref 사용
@@ -80,6 +71,15 @@ export function useSocket() {
             setIsConnected(true);
             setSocketId(socket.id || null);
         };
+
+        // 소켓이 이미 연결되어 있는 경우 즉시 상태 업데이트
+        // (이벤트 루프를 통해 비동기적으로 처리)
+        if (socket.connected) {
+            // setTimeout을 사용하여 이벤트 루프를 통해 비동기적으로 처리
+            setTimeout(() => {
+                handleConnect();
+            }, 0);
+        }
 
         const handleDisconnect = (reason: string) => {
             console.log("❌ Socket disconnected:", reason);
