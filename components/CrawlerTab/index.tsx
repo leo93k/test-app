@@ -5,8 +5,10 @@ import type { BlogSearchResult } from "./types";
 import type { TabType } from "./Tabs";
 import BlogSearchSection from "./BlogSearchSection";
 import FriendRequestSection from "./FriendRequestSection";
-import LogsDisplay from "./LogsDisplay";
 import Tabs from "./Tabs";
+import { useSocket } from "@/lib/hooks/useSocket";
+import LogTestSection from "./LogTestSection";
+import LogList from "./LogList";
 
 export default function CrawlerTab() {
     const [activeTab, setActiveTab] = useState<TabType>("main");
@@ -18,8 +20,11 @@ export default function CrawlerTab() {
     >([]);
     const [friendRequestLoading, setFriendRequestLoading] = useState(false);
     const [searchLoading, setSearchLoading] = useState(false);
-    const [headless, setHeadless] = useState(false);
+    const [headless, setHeadless] = useState(true);
     const [error, setError] = useState("");
+
+    // Socket.io 연결 상태 확인
+    const { isConnected, sessionId } = useSocket();
 
     const handleBlogSearch = async (keyword: string, maxPage: number) => {
         if (!keyword.trim()) {
@@ -31,6 +36,34 @@ export default function CrawlerTab() {
         setError("");
 
         try {
+            // Socket.io 서버 초기화 확인 및 초기화 시도
+            try {
+                await fetch("/api/socket", { method: "GET" });
+            } catch (socketError) {
+                console.warn(
+                    "Socket.io 서버 초기화 실패, 계속 진행:",
+                    socketError
+                );
+            }
+
+            // useSocket에서 생성한 sessionId 사용 (항상 생성되므로 null 체크만)
+            if (!sessionId) {
+                throw new Error(
+                    "Socket sessionId가 없습니다. 소켓 연결을 확인해주세요."
+                );
+            }
+
+            // 소켓에 join-session을 다시 보내서 확실히 등록 (이미 등록되어 있어도 문제없음)
+            const { connectSocket } = await import("@/lib/socket");
+            const socket = connectSocket();
+            if (socket.connected) {
+                socket.emit("join-session", sessionId);
+                console.log(`📤 Sent sessionId to server: ${sessionId}`);
+            }
+
+            // 약간의 지연 후 API 호출 (소켓 등록이 완료되도록)
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
             const response = await fetch("/api/blog-search", {
                 method: "POST",
                 headers: {
@@ -42,6 +75,7 @@ export default function CrawlerTab() {
                         { length: maxPage },
                         (_, i) => i + 1
                     ),
+                    sessionId: sessionId, // useSocket에서 가져온 sessionId 사용
                 }),
             });
 
@@ -87,7 +121,9 @@ export default function CrawlerTab() {
             <div className="max-w-4xl mx-auto mb-8">
                 <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
                 {activeTab === "main" ? (
-                    <div>
+                    <div className="flex flex-col gap-4">
+                        <LogList />
+
                         <BlogSearchSection
                             searchResults={searchResults}
                             friendRequestTargets={friendRequestTargets}
@@ -119,7 +155,13 @@ export default function CrawlerTab() {
                         )}
                     </div>
                 ) : (
-                    <LogsDisplay />
+                    <div className="max-w-4xl mx-auto">
+                        {/* 로그 테스트 섹션 */}
+                        <LogTestSection />
+
+                        {/* 로그 표시 영역 */}
+                        <LogList />
+                    </div>
                 )}
             </div>
         </div>
