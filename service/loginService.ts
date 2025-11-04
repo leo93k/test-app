@@ -132,29 +132,44 @@ export class AutoLoginService {
     }
 
     private async clickLoginButton(passwordField: any): Promise<LoginResult> {
-        let loginButton = null;
-        // loginSubmitSelectors를 우선적으로 사용하고, 없으면 loginButtonSelectors 사용
+        const urlBeforeClick = this.page.url();
+        await this.logPageState("로그인 버튼 클릭 전");
+
+        const loginButton = await this.findLoginButton();
+
+        if (loginButton) {
+            await this.clickLoginButtonAndWait(loginButton);
+            const urlAfterClick = this.page.url();
+
+            const redirectResult = await this.waitForLoginRedirect(
+                urlAfterClick
+            );
+
+            if (!redirectResult.success) {
+                return redirectResult;
+            }
+
+            return this.verifyLoginSuccess(urlBeforeClick);
+        } else {
+            return await this.tryLoginWithEnterKey(passwordField);
+        }
+    }
+
+    private async findLoginButton() {
         const selectorsToTry = [
             ...loginSubmitSelectors,
             ...loginButtonSelectors,
         ];
 
-        // 로그인 버튼 클릭 전 URL 및 페이지 상태 확인
-        const urlBeforeClick = this.page.url();
-        const titleBeforeClick = await this.page.title();
-        await this.logger.info(`📋 로그인 버튼 클릭 전 상태:`);
-        await this.logger.info(`  - URL: ${urlBeforeClick}`);
-        await this.logger.info(`  - 페이지 제목: ${titleBeforeClick}`);
-
         for (const selector of selectorsToTry) {
             try {
                 await this.logger.info(`🔍 로그인 버튼 찾기 시도: ${selector}`);
-                loginButton = await this.page.$(selector);
+                const loginButton = await this.page.$(selector);
                 if (loginButton) {
                     await this.logger.success(
                         `✅ 로그인 버튼 발견: ${selector}`
                     );
-                    break;
+                    return loginButton;
                 } else {
                     await this.logger.info(
                         `❌ 셀렉터 "${selector}"로 버튼을 찾을 수 없음`
@@ -168,269 +183,283 @@ export class AutoLoginService {
             }
         }
 
-        if (loginButton) {
-            await this.logger.info(`🖱️ 로그인 버튼 클릭 시작...`);
-            await loginButton.click();
-            await this.logger.success(`✅ 로그인 버튼 클릭 완료`);
+        return null;
+    }
 
-            // 클릭 직후 네비게이션 시작 대기
-            await this.page
-                .waitForLoadState("domcontentloaded", { timeout: ACTION_DELAY })
-                .catch(() => {});
-            const urlAfterClick = this.page.url();
-            await this.logger.info(
-                `📋 로그인 버튼 클릭 직후 URL: ${urlAfterClick}`
-            );
+    private async logPageState(context: string) {
+        const url = this.page.url();
+        const title = await this.page.title();
+        await this.logger.info(`📋 ${context} 상태:`);
+        await this.logger.info(`  - URL: ${url}`);
+        await this.logger.info(`  - 페이지 제목: ${title}`);
+    }
 
-            // 로그인 후 페이지 로드 대기 (단계별로 URL 확인)
-            let elapsedTime = 0;
+    private async clickLoginButtonAndWait(loginButton: any) {
+        await this.logger.info(`🖱️ 로그인 버튼 클릭 시작...`);
+        await loginButton.click();
+        await this.logger.success(`✅ 로그인 버튼 클릭 완료`);
 
-            await this.logger.info(`⏳ 로그인 완료 및 리다이렉트 대기 중...`);
+        // 클릭 직후 네비게이션 시작 대기
+        await this.page
+            .waitForLoadState("domcontentloaded", { timeout: ACTION_DELAY })
+            .catch(() => {});
+    }
 
-            // URL 변경 감지를 위한 초기 URL 저장
-            let previousUrl = urlAfterClick;
+    private async getCurrentPageInfo(): Promise<{
+        url: string;
+        title: string;
+    }> {
+        let currentUrl: string;
+        let currentTitle: string = "";
 
-            while (elapsedTime < DEFAULT_TIMEOUT) {
-                // URL이 변경되거나 네트워크가 안정화될 때까지 대기
-                await Promise.race([
-                    this.page
-                        .waitForURL("**", { timeout: ACTION_DELAY })
-                        .catch(() => {}),
-                    this.page
-                        .waitForLoadState("networkidle", {
-                            timeout: ACTION_DELAY,
-                        })
-                        .catch(() => {}),
-                    new Promise((resolve) => setTimeout(resolve, ACTION_DELAY)),
-                ]);
-
-                elapsedTime += ACTION_DELAY;
-
-                // 네비게이션 중일 수 있으므로 try-catch로 처리
-                let currentUrl: string;
-                let currentTitle: string = "";
-
-                try {
-                    currentUrl = this.page.url();
-                } catch {
-                    // 네비게이션 중이면 잠시 대기 후 재시도
-                    await new Promise((resolve) => setTimeout(resolve, 100));
-                    try {
-                        currentUrl = this.page.url();
-                    } catch {
-                        currentUrl = "네비게이션 중...";
-                    }
-                }
-
-                try {
-                    currentTitle = await this.page.title();
-                } catch {
-                    // 네비게이션 중이면 제목을 가져올 수 없음
-                    currentTitle = "로딩 중...";
-                }
-
-                await this.logger.info(`📋 대기 중 (${elapsedTime}ms):`);
-                await this.logger.info(`  - URL: ${currentUrl}`);
-                await this.logger.info(`  - 페이지 제목: ${currentTitle}`);
-
-                // URL이 변경되었는지 확인
-                if (currentUrl !== previousUrl) {
-                    await this.logger.info(
-                        `🔄 URL 변경 감지: ${previousUrl} → ${currentUrl}`
-                    );
-                    previousUrl = currentUrl;
-                }
-
-                // 로그인 오류 메시지 확인 (비밀번호 오류만 감지, Caps Lock 등 경고는 무시)
-                try {
-                    const errorMessage = await this.page.evaluate(
-                        (selectors: string[]) => {
-                            // 우선순위 1: 페이지 전체 텍스트에서 비밀번호 오류 메시지 확인
-                            const bodyText = document.body?.textContent || "";
-
-                            // 자동입력 방지 문자 오류 메시지 확인
-                            if (
-                                bodyText.includes("아이디") &&
-                                (bodyText.includes("자동입력 방지 문자") ||
-                                    bodyText.includes("자동입력 방지") ||
-                                    bodyText.includes(
-                                        "입력하신 내용을 다시 확인"
-                                    ))
-                            ) {
-                                return "자동입력 방지 문자로 인해 로그인에 실패했습니다.";
-                            }
-
-                            // 비밀번호 오류 메시지 확인
-                            if (
-                                bodyText.includes("아이디") &&
-                                (bodyText.includes("비밀번호가 잘못") ||
-                                    bodyText.includes("비밀번호를 정확히"))
-                            ) {
-                                // 정확한 에러 메시지 패턴 찾기
-                                const errorPatterns = [
-                                    /아이디.*또는.*비밀번호가.*잘못.*되었습니다/,
-                                    /아이디.*비밀번호.*잘못/,
-                                    /비밀번호가.*잘못/,
-                                ];
-
-                                for (const pattern of errorPatterns) {
-                                    const match = bodyText.match(pattern);
-                                    if (match && match[0]) {
-                                        return match[0].trim();
-                                    }
-                                }
-
-                                return "아이디 또는 비밀번호가 잘못 되었습니다.";
-                            }
-
-                            // 우선순위 2: 에러 메시지 셀렉터로 찾기 (Caps Lock 등 경고 제외)
-                            for (const selector of selectors) {
-                                const element =
-                                    document.querySelector(selector);
-                                if (element && element.textContent) {
-                                    const text = element.textContent.trim();
-
-                                    // Caps Lock이나 일반 경고 메시지는 무시
-                                    if (
-                                        text.includes("Caps Lock") ||
-                                        text.includes("대소문자") ||
-                                        text.includes("켜져 있습니다")
-                                    ) {
-                                        continue;
-                                    }
-
-                                    // 비밀번호 오류 메시지만 반환
-                                    if (
-                                        (text.includes("아이디") ||
-                                            text.includes("비밀번호")) &&
-                                        text.includes("잘못")
-                                    ) {
-                                        return text;
-                                    }
-                                }
-                            }
-
-                            return null;
-                        },
-                        loginErrorSelectors
-                    );
-
-                    if (errorMessage) {
-                        // 에러는 상위 레벨에서 로깅하므로 여기서는 로그 출력하지 않음
-                        return {
-                            success: false,
-                            message: `Login failed: ${errorMessage}`,
-                            currentUrl: currentUrl,
-                        };
-                    }
-                } catch (error) {
-                    // 에러 메시지 확인 중 오류는 무시하고 계속 진행
-                    await this.logger.info(
-                        `  - 에러 메시지 확인 중 오류: ${error}`
-                    );
-                }
-
-                // URL 변경 감지는 이미 위에서 처리됨
-
-                // 로그인 페이지에서 벗어났는지 확인
-                if (
-                    !currentUrl.includes("nidlogin") &&
-                    !currentUrl.includes("nid.naver.com/nidlogin")
-                ) {
-                    await this.logger.success(
-                        `✅ 로그인 페이지에서 벗어남: ${currentUrl}`
-                    );
-                    break;
-                }
-            }
-
-            // 최종 로그인 성공 여부 확인
-            const finalUrl = this.page.url();
-            const finalTitle = await this.page.title();
-            await this.logger.info(`📋 최종 상태:`);
-            await this.logger.info(`  - 최종 URL: ${finalUrl}`);
-            await this.logger.info(`  - 최종 페이지 제목: ${finalTitle}`);
-            await this.logger.info(`  - 원래 URL: ${urlBeforeClick}`);
-            await this.logger.info(
-                `  - URL이 변경됨: ${
-                    finalUrl !== urlBeforeClick ? "예" : "아니오"
-                }`
-            );
-            await this.logger.info(
-                `  - nidlogin 포함 여부: ${
-                    finalUrl.includes("nidlogin") ? "예" : "아니오"
-                }`
-            );
-
-            // 로그인 페이지 요소가 여전히 존재하는지 확인
+        try {
+            currentUrl = this.page.url();
+        } catch {
+            // 네비게이션 중이면 잠시 대기 후 재시도
+            await new Promise((resolve) => setTimeout(resolve, 100));
             try {
-                const loginFormStillExists =
-                    (await this.page.$("input#id")) !== null;
+                currentUrl = this.page.url();
+            } catch {
+                currentUrl = "네비게이션 중...";
+            }
+        }
+
+        try {
+            currentTitle = await this.page.title();
+        } catch {
+            // 네비게이션 중이면 제목을 가져올 수 없음
+            currentTitle = "로딩 중...";
+        }
+
+        return { url: currentUrl, title: currentTitle };
+    }
+
+    private async checkLoginError(): Promise<string | null> {
+        try {
+            const errorMessage = await this.page.evaluate(
+                (selectors: string[]) => {
+                    const bodyText = document.body?.textContent || "";
+
+                    // 자동입력 방지 문자 오류 메시지 확인
+                    if (
+                        bodyText.includes("아이디") &&
+                        (bodyText.includes("자동입력 방지 문자") ||
+                            bodyText.includes("자동입력 방지") ||
+                            bodyText.includes("입력하신 내용을 다시 확인"))
+                    ) {
+                        return "자동입력 방지 문자로 인해 로그인에 실패했습니다.";
+                    }
+
+                    // 비밀번호 오류 메시지 확인
+                    if (
+                        bodyText.includes("아이디") &&
+                        (bodyText.includes("비밀번호가 잘못") ||
+                            bodyText.includes("비밀번호를 정확히"))
+                    ) {
+                        const errorPatterns = [
+                            /아이디.*또는.*비밀번호가.*잘못.*되었습니다/,
+                            /아이디.*비밀번호.*잘못/,
+                            /비밀번호가.*잘못/,
+                        ];
+
+                        for (const pattern of errorPatterns) {
+                            const match = bodyText.match(pattern);
+                            if (match && match[0]) {
+                                return match[0].trim();
+                            }
+                        }
+
+                        return "아이디 또는 비밀번호가 잘못 되었습니다.";
+                    }
+
+                    // 에러 메시지 셀렉터로 찾기 (Caps Lock 등 경고 제외)
+                    for (const selector of selectors) {
+                        const element = document.querySelector(selector);
+                        if (element && element.textContent) {
+                            const text = element.textContent.trim();
+
+                            if (
+                                text.includes("Caps Lock") ||
+                                text.includes("대소문자") ||
+                                text.includes("켜져 있습니다")
+                            ) {
+                                continue;
+                            }
+
+                            if (
+                                (text.includes("아이디") ||
+                                    text.includes("비밀번호")) &&
+                                text.includes("잘못")
+                            ) {
+                                return text;
+                            }
+                        }
+                    }
+
+                    return null;
+                },
+                loginErrorSelectors
+            );
+
+            return errorMessage;
+        } catch {
+            return null;
+        }
+    }
+
+    private async waitForLoginRedirect(
+        urlAfterClick: string
+    ): Promise<LoginResult> {
+        await this.logger.info(`⏳ 로그인 완료 및 리다이렉트 대기 중...`);
+
+        let elapsedTime = 0;
+        let previousUrl = urlAfterClick;
+
+        while (elapsedTime < DEFAULT_TIMEOUT) {
+            // URL이 변경되거나 네트워크가 안정화될 때까지 대기
+            await Promise.race([
+                this.page
+                    .waitForURL("**", { timeout: ACTION_DELAY })
+                    .catch(() => {}),
+                this.page
+                    .waitForLoadState("networkidle", {
+                        timeout: ACTION_DELAY,
+                    })
+                    .catch(() => {}),
+                new Promise((resolve) => setTimeout(resolve, ACTION_DELAY)),
+            ]);
+
+            elapsedTime += ACTION_DELAY;
+            const { url: currentUrl, title: currentTitle } =
+                await this.getCurrentPageInfo();
+
+            await this.logger.info(`📋 대기 중 (${elapsedTime}ms):`);
+            await this.logger.info(`  - URL: ${currentUrl}`);
+            await this.logger.info(`  - 페이지 제목: ${currentTitle}`);
+
+            // URL 변경 감지
+            if (currentUrl !== previousUrl) {
                 await this.logger.info(
-                    `  - 로그인 폼 여전히 존재: ${
-                        loginFormStillExists ? "예" : "아니오"
-                    }`
+                    `🔄 URL 변경 감지: ${previousUrl} → ${currentUrl}`
                 );
-            } catch (e) {
-                await this.logger.error(`  - 로그인 폼 확인 중 오류: ${e}`);
+                previousUrl = currentUrl;
             }
 
-            // 로그인 성공 여부를 URL이나 페이지 내용으로 확인
-            const isLoginPage =
-                finalUrl.includes("nidlogin") ||
-                finalUrl.includes("nid.naver.com/nidlogin") ||
-                finalUrl.includes("nid.naver.com/nidlogin.login");
-
-            if (isLoginPage) {
-                await this.logger.error(
-                    `❌ 로그인 실패 감지 - 여전히 로그인 페이지에 있음`
-                );
-                await this.logger.error(`  - 최종 URL: ${finalUrl}`);
-                await this.logger.error(`  - 최종 페이지 제목: ${finalTitle}`);
+            // 로그인 오류 메시지 확인
+            const errorMessage = await this.checkLoginError();
+            if (errorMessage) {
                 return {
                     success: false,
-                    message: `Login may have failed - still on login page. URL: ${finalUrl}, Title: ${finalTitle}`,
-                    currentUrl: finalUrl,
-                };
-            } else {
-                await this.logger.success(
-                    `✅ 로그인 성공 - 메인 페이지로 리다이렉트됨`
-                );
-                return {
-                    success: true,
-                    message: "Login successful",
-                    currentUrl: finalUrl,
+                    message: `Login failed: ${errorMessage}`,
+                    currentUrl: currentUrl,
                 };
             }
-        } else {
+
+            // 로그인 페이지에서 벗어났는지 확인
+            if (
+                !currentUrl.includes("nidlogin") &&
+                !currentUrl.includes("nid.naver.com/nidlogin")
+            ) {
+                await this.logger.success(
+                    `✅ 로그인 페이지에서 벗어남: ${currentUrl}`
+                );
+                break;
+            }
+        }
+
+        return { success: true, message: "Continue to verification" };
+    }
+
+    private async verifyLoginSuccess(
+        urlBeforeClick: string
+    ): Promise<LoginResult> {
+        const finalUrl = this.page.url();
+        const finalTitle = await this.page.title();
+
+        await this.logger.info(`📋 최종 상태:`);
+        await this.logger.info(`  - 최종 URL: ${finalUrl}`);
+        await this.logger.info(`  - 최종 페이지 제목: ${finalTitle}`);
+        await this.logger.info(`  - 원래 URL: ${urlBeforeClick}`);
+        await this.logger.info(
+            `  - URL이 변경됨: ${finalUrl !== urlBeforeClick ? "예" : "아니오"}`
+        );
+        await this.logger.info(
+            `  - nidlogin 포함 여부: ${
+                finalUrl.includes("nidlogin") ? "예" : "아니오"
+            }`
+        );
+
+        // 로그인 페이지 요소가 여전히 존재하는지 확인
+        try {
+            const loginFormStillExists =
+                (await this.page.$("input#id")) !== null;
             await this.logger.info(
-                `⚠️ 로그인 버튼을 찾을 수 없음, Enter 키 시도...`
-            );
-            const urlBeforeEnter = this.page.url();
-            await this.logger.info(`📋 Enter 키 전 URL: ${urlBeforeEnter}`);
-
-            await passwordField.press("Enter");
-            await this.logger.info(`⌨️ Enter 키 입력 완료`);
-
-            await this.page.waitForTimeout(PAGE_NAVIGATION_DELAY);
-
-            // Enter 키 후에도 확인
-            const urlAfterEnter = this.page.url();
-            const titleAfterEnter = await this.page.title();
-            await this.logger.info(`📋 Enter 키 후 상태:`);
-            await this.logger.info(`  - URL: ${urlAfterEnter}`);
-            await this.logger.info(`  - 페이지 제목: ${titleAfterEnter}`);
-            await this.logger.info(
-                `  - URL 변경 여부: ${
-                    urlAfterEnter !== urlBeforeEnter ? "예" : "아니오"
+                `  - 로그인 폼 여전히 존재: ${
+                    loginFormStillExists ? "예" : "아니오"
                 }`
             );
+        } catch (e) {
+            await this.logger.error(`  - 로그인 폼 확인 중 오류: ${e}`);
+        }
 
+        // 로그인 성공 여부를 URL이나 페이지 내용으로 확인
+        const isLoginPage =
+            finalUrl.includes("nidlogin") ||
+            finalUrl.includes("nid.naver.com/nidlogin") ||
+            finalUrl.includes("nid.naver.com/nidlogin.login");
+
+        if (isLoginPage) {
+            await this.logger.error(
+                `❌ 로그인 실패 감지 - 여전히 로그인 페이지에 있음`
+            );
+            await this.logger.error(`  - 최종 URL: ${finalUrl}`);
+            await this.logger.error(`  - 최종 페이지 제목: ${finalTitle}`);
+            return {
+                success: false,
+                message: `Login may have failed - still on login page. URL: ${finalUrl}, Title: ${finalTitle}`,
+                currentUrl: finalUrl,
+            };
+        } else {
+            await this.logger.success(
+                `✅ 로그인 성공 - 메인 페이지로 리다이렉트됨`
+            );
             return {
                 success: true,
-                message: "Login attempted with Enter key",
-                currentUrl: urlAfterEnter,
+                message: "Login successful",
+                currentUrl: finalUrl,
             };
         }
+    }
+
+    private async tryLoginWithEnterKey(
+        passwordField: any
+    ): Promise<LoginResult> {
+        await this.logger.info(
+            `⚠️ 로그인 버튼을 찾을 수 없음, Enter 키 시도...`
+        );
+        const urlBeforeEnter = this.page.url();
+        await this.logger.info(`📋 Enter 키 전 URL: ${urlBeforeEnter}`);
+
+        await passwordField.press("Enter");
+        await this.logger.info(`⌨️ Enter 키 입력 완료`);
+
+        await this.page.waitForTimeout(PAGE_NAVIGATION_DELAY);
+
+        const urlAfterEnter = this.page.url();
+        const titleAfterEnter = await this.page.title();
+        await this.logger.info(`📋 Enter 키 후 상태:`);
+        await this.logger.info(`  - URL: ${urlAfterEnter}`);
+        await this.logger.info(`  - 페이지 제목: ${titleAfterEnter}`);
+        await this.logger.info(
+            `  - URL 변경 여부: ${
+                urlAfterEnter !== urlBeforeEnter ? "예" : "아니오"
+            }`
+        );
+
+        return {
+            success: true,
+            message: "Login attempted with Enter key",
+            currentUrl: urlAfterEnter,
+        };
     }
 }
