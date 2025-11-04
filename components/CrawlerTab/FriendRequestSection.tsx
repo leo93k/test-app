@@ -42,7 +42,8 @@ const messageSamples = {
     sample5: "블로그 운영 화이팅! 서로이웃 신청드립니다. 함께 성장해요! 🚀",
 };
 
-const isProduction = process.env.NODE_ENV === "production";
+const isProduction = true;
+// const isProduction = process.env.NODE_ENV === "production";
 
 export default function FriendRequestSection({
     username,
