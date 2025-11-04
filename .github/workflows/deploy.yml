@@ -1,0 +1,159 @@
+name: Deploy to EC2
+
+on:
+    push:
+        branches:
+            - main
+    workflow_dispatch:
+
+env:
+    NODE_VERSION: "20"
+
+jobs:
+    deploy:
+        name: Deploy to EC2
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: "yarn"
+
+            - name: Install dependencies
+              run: yarn install --frozen-lockfile
+
+            - name: Build application
+              run: yarn build
+              env:
+                  NODE_ENV: production
+
+            - name: Configure SSH
+              run: |
+                  mkdir -p ~/.ssh
+                  echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+                  chmod 600 ~/.ssh/deploy_key
+                  ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+            - name: Deploy to EC2
+              env:
+                  EC2_HOST: ${{ secrets.EC2_HOST }}
+                  EC2_USER: ${{ secrets.EC2_USER }}
+              run: |
+                  # EC2로 파일 전송 (.next 포함, node_modules는 제외)
+                  # 경로를 SSH로 확장하여 절대 경로로 변환
+                  DEPLOY_PATH_RAW="${{ secrets.EC2_DEPLOY_PATH || '~/test-app' }}"
+                  ACTUAL_PATH=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+                    ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+                    "case '$DEPLOY_PATH_RAW' in ~*) echo \"\${HOME}${DEPLOY_PATH_RAW#\~}\";; *) echo '$DEPLOY_PATH_RAW';; esac")
+
+                  echo "📁 Deploying to: $ACTUAL_PATH"
+
+                  rsync -avz --delete \
+                    -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+                    --exclude '.git' \
+                    --exclude 'node_modules' \
+                    --exclude '.env*' \
+                    --exclude '*.log' \
+                    --exclude '.DS_Store' \
+                    ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:$ACTUAL_PATH/
+
+            - name: Run deployment script on EC2
+              env:
+                  EC2_HOST: ${{ secrets.EC2_HOST }}
+                  EC2_USER: ${{ secrets.EC2_USER }}
+                  DEPLOY_PATH: ${{ secrets.EC2_DEPLOY_PATH || '~/test-app' }}
+              run: |
+                  ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+                    ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+                  set -e
+
+                  # 배포 경로 설정 (~를 $HOME으로 확장)
+                  DEPLOY_PATH_RAW="${{ secrets.EC2_DEPLOY_PATH || '~/test-app' }}"
+                  if [[ "$DEPLOY_PATH_RAW" == ~* ]]; then
+                    DEPLOY_PATH="${DEPLOY_PATH_RAW/#\~/$HOME}"
+                  else
+                    DEPLOY_PATH="$DEPLOY_PATH_RAW"
+                  fi
+                  echo "📁 Deployment path: $DEPLOY_PATH"
+
+                  # 디렉토리가 없으면 생성
+                  mkdir -p "$DEPLOY_PATH"
+
+                  cd "$DEPLOY_PATH" || exit 1
+
+                  # Node.js 및 Yarn 설치 확인 및 설치
+                  if ! command -v node &> /dev/null; then
+                    echo "📦 Installing Node.js..."
+                    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+                    sudo apt-get install -y nodejs
+                  fi
+
+                  if ! command -v yarn &> /dev/null; then
+                    echo "📦 Installing Yarn..."
+                    curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add - 2>/dev/null || true
+                    echo "deb https://dl.yarnpkg.com/debian stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
+                    sudo apt-get update
+                    sudo apt-get install -y yarn
+                  fi
+
+                  echo "✅ Node.js version: $(node --version)"
+                  echo "✅ Yarn version: $(yarn --version)"
+
+                  echo "📦 Installing dependencies..."
+                  yarn install --frozen-lockfile --production=false
+
+                  echo "🌐 Installing Playwright browsers..."
+                  yarn postinstall || echo "⚠️ Playwright install failed, continuing..."
+
+                  echo "🔄 Restarting application..."
+                  # 기존 프로세스 종료 (sudo로 실행된 프로세스도 포함)
+                  echo "🛑 Stopping existing processes..."
+                  pkill -f "next-server" || true
+                  sudo pkill -f "next-server" || true
+                  sleep 2
+
+                  # 프로세스가 완전히 종료될 때까지 대기 (최대 10초)
+                  for i in {1..10}; do
+                    if ! pgrep -f "next-server" > /dev/null && ! sudo pgrep -f "next-server" > /dev/null; then
+                      echo "✅ All processes stopped"
+                      break
+                    fi
+                    echo "⏳ Waiting for processes to stop... ($i/10)"
+                    sleep 1
+                  done
+
+                  # 혹시 남아있는 프로세스 강제 종료
+                  if pgrep -f "next-server" > /dev/null || sudo pgrep -f "next-server" > /dev/null; then
+                    echo "⚠️ Force killing remaining processes..."
+                    pkill -9 -f "next-server" || true
+                    sudo pkill -9 -f "next-server" || true
+                    sleep 2
+                  fi
+
+                  # 애플리케이션 재시작 (백그라운드)
+                  # 포트 80은 privileged port이므로 sudo 필요
+                  # -E: 환경 변수 보존, env "PATH=$PATH": PATH 보존
+                  cd "$DEPLOY_PATH" || exit 1
+                  nohup sudo -E env "PATH=$PATH" yarn start:80 > nextjs.log 2>&1 &
+
+                  echo "✅ Deployment completed!"
+                  sleep 3
+
+
+                  # 서비스 상태 확인 (sudo로 실행된 프로세스도 포함)
+                  if pgrep -f "next-server" > /dev/null || sudo pgrep -f "next-server" > /dev/null; then
+                    echo "✅ Application is running"
+                    ps aux | grep "next-server" | grep -v grep || true
+                  else
+                    echo "❌ Application failed to start"
+                    if [ -f nextjs.log ]; then
+                      tail -n 50 nextjs.log
+                    fi
+                    exit 1
+                  fi
+                  EOF
