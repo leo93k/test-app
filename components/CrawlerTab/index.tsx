@@ -148,8 +148,6 @@ export default function CrawlerTab() {
                 <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
                 {activeTab === "main" ? (
                     <div className="flex flex-col gap-4">
-                        <LogList />
-
                         <BlogSearchSection
                             searchResults={searchResults}
                             friendRequestTargets={friendRequestTargets}
@@ -180,6 +178,8 @@ export default function CrawlerTab() {
                                 </div>
                             </div>
                         )}
+
+                        <LogList />
                     </div>
                 ) : (
                     <div className="max-w-4xl mx-auto">

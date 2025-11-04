@@ -125,7 +125,7 @@ export default async function handler(
         }
 
         // 서로이웃 추가 모드인 경우
-        await executeFriendRequestProcess(
+        const friendRequestStatus = await executeFriendRequestProcess(
             page,
             logger,
             username,
@@ -147,6 +147,7 @@ export default async function handler(
 
         return res.status(200).json({
             success: true,
+            status: friendRequestStatus, // "success" | "already-friend" | "already-requesting" | "failed"
             data: {
                 browserKeptOpen: false,
             },
@@ -170,6 +171,8 @@ export default async function handler(
         }
 
         return res.status(500).json({
+            success: false,
+            status: "failed",
             error: "Failed to crawl the website",
             details: error instanceof Error ? error.message : "Unknown error",
         });

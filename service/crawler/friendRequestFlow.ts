@@ -589,7 +589,7 @@ export async function executeFriendRequestProcess(
     password: string,
     message: string,
     originalUrl: string
-): Promise<void> {
+): Promise<"success" | "already-friend" | "already-requesting" | "failed"> {
     await logger.info("🤝 서로이웃 추가 프로세스를 시작합니다...");
 
     // 로그인 플로우 import 및 실행
@@ -600,11 +600,25 @@ export async function executeFriendRequestProcess(
         throw new Error("로그인 버튼을 찾을 수 없습니다.");
     }
 
-    // 로그인 폼 입력 및 제출
-    await loginFlow.fillAndSubmitLoginForm(page, logger, username, password);
+    try {
+        // 로그인 폼 입력 및 제출
+        await loginFlow.fillAndSubmitLoginForm(
+            page,
+            logger,
+            username,
+            password
+        );
 
-    // 원래 블로그 페이지로 돌아가기
-    await loginFlow.navigateBackToBlog(page, logger, originalUrl);
+        // 원래 블로그 페이지로 돌아가기
+        await loginFlow.navigateBackToBlog(page, logger, originalUrl);
+    } catch (error) {
+        await logger.error(
+            `로그인 프로세스 오류: ${
+                error instanceof Error ? error.message : "알 수 없는 오류"
+            }`
+        );
+        return "failed";
+    }
 
     // 서로이웃 추가 버튼 클릭 또는 이미 이웃인지 확인
     const friendRequestResult = await clickFriendRequestButton(page, logger);
@@ -613,7 +627,7 @@ export async function executeFriendRequestProcess(
         await logger.success(
             "✅ 이미 이웃 상태입니다. 서로이웃 추가 프로세스를 종료합니다."
         );
-        return; // 이미 이웃이므로 바로 종료
+        return "already-friend"; // 이미 이웃이므로 바로 종료
     }
 
     if (friendRequestResult === "not-found") {
@@ -638,11 +652,51 @@ export async function executeFriendRequestProcess(
         await logger.success(
             "✅ 이미 추가 중입니다. 서로이웃 추가 프로세스를 종료합니다. (팝업 닫힘)"
         );
-        return;
+        return "already-requesting";
+    }
+
+    // 에러 메시지 확인: "서로이웃 신청을 받지 않는 이웃입니다" (라디오 버튼 클릭 후)
+    try {
+        const errorMessage = await popupPage.evaluate(() => {
+            const bodyText = document.body?.textContent || "";
+            return bodyText;
+        });
+
+        if (
+            errorMessage.includes("서로이웃 신청을 받지 않는") ||
+            errorMessage.includes("서로이웃 신청을 받지 않는 이웃입니다") ||
+            errorMessage.includes("신청을 받지 않는 이웃")
+        ) {
+            await logger.error("❌ 서로이웃 신청을 받지 않는 이웃입니다.");
+            return "failed";
+        }
+    } catch (error) {
+        // 에러 메시지 확인 실패는 무시하고 계속 진행
+        await logger.info("ℹ️ 에러 메시지 확인 중 오류 발생, 계속 진행합니다.");
     }
 
     // 다음 버튼 클릭
     await clickNextButton(popupPage, logger);
+
+    // 에러 메시지 확인: "서로이웃 신청을 받지 않는 이웃입니다"
+    try {
+        const errorMessage = await popupPage.evaluate(() => {
+            const bodyText = document.body?.textContent || "";
+            return bodyText;
+        });
+
+        if (
+            errorMessage.includes("서로이웃 신청을 받지 않는") ||
+            errorMessage.includes("서로이웃 신청을 받지 않는 이웃입니다") ||
+            errorMessage.includes("신청을 받지 않는 이웃")
+        ) {
+            await logger.error("❌ 서로이웃 신청을 받지 않는 이웃입니다.");
+            return "failed";
+        }
+    } catch (error) {
+        // 에러 메시지 확인 실패는 무시하고 계속 진행
+        await logger.info("ℹ️ 에러 메시지 확인 중 오류 발생, 계속 진행합니다.");
+    }
 
     // 이미 추가 중인지 확인
     const isAlreadyProcessing = await checkIfAlreadyProcessing(
@@ -650,7 +704,7 @@ export async function executeFriendRequestProcess(
         logger
     );
     if (isAlreadyProcessing) {
-        return; // 이미 추가 중이므로 종료
+        return "already-requesting"; // 이미 추가 중이므로 종료
     }
 
     // 정상적인 경우 메시지 입력을 위해 대기
@@ -661,7 +715,7 @@ export async function executeFriendRequestProcess(
         await logger.success(
             "✅ 이미 추가 중입니다. 서로이웃 추가 프로세스를 종료합니다. (팝업 닫힘)"
         );
-        return;
+        return "already-requesting";
     }
 
     // 메시지 입력
@@ -676,7 +730,7 @@ export async function executeFriendRequestProcess(
                 await logger.success(
                     "✅ 이미 추가 중입니다. 서로이웃 추가 프로세스를 종료합니다. (팝업 닫힘)"
                 );
-                return;
+                return "already-requesting";
             }
 
             // 최종 다음 버튼 클릭
@@ -690,7 +744,7 @@ export async function executeFriendRequestProcess(
                 await logger.success(
                     "✅ 서로이웃 추가 프로세스 완료! (팝업 닫힘)"
                 );
-                return;
+                return "success";
             }
         } catch (error) {
             // 메시지 입력 중 에러 발생 (이미 처리된 것으로 간주)
@@ -703,7 +757,7 @@ export async function executeFriendRequestProcess(
                 await logger.success(
                     "✅ 이미 추가 중입니다. 서로이웃 추가 프로세스를 종료합니다. (팝업 닫힘)"
                 );
-                return;
+                return "already-requesting";
             }
             throw error; // 다른 에러는 다시 던짐
         }
@@ -712,4 +766,5 @@ export async function executeFriendRequestProcess(
     }
 
     await logger.success("🎉 서로이웃 추가 프로세스 완료!");
+    return "success";
 }

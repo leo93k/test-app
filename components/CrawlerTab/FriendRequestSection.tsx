@@ -1,8 +1,22 @@
 "use client";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Logger } from "@/service/logger";
 import { useSocket } from "@/lib/hooks/useSocket";
 import type { BlogSearchResult } from "./types";
+import { Progress } from "@/components/ui/progress";
+import {
+    Accordion,
+    AccordionContent,
+    AccordionItem,
+    AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 
 interface FriendRequestSectionProps {
     username: string;
@@ -53,6 +67,12 @@ export default function FriendRequestSection({
     );
     const [friendRequestLoading, setFriendRequestLoading] = useState(false);
     const [loginTestLoading, setLoginTestLoading] = useState(false);
+    const [loginTestModalOpen, setLoginTestModalOpen] = useState(false);
+    const [loginTestModalTitle, setLoginTestModalTitle] = useState("");
+    const [loginTestModalMessage, setLoginTestModalMessage] = useState("");
+    const [loginTestModalType, setLoginTestModalType] = useState<
+        "success" | "error"
+    >("success");
     const abortControllerRef = useRef<AbortController | null>(null);
     const ongoingRequestsRef = useRef<
         Promise<{
@@ -60,8 +80,70 @@ export default function FriendRequestSection({
             blog: BlogSearchResult;
             index: number;
             error?: string;
+            status?:
+                | "success"
+                | "already-friend"
+                | "already-requesting"
+                | "failed";
         }>[]
     >([]);
+
+    // 각 블로그의 상태 추적
+    type BlogStatus =
+        | "pending"
+        | "processing"
+        | "success"
+        | "already-friend"
+        | "already-requesting"
+        | "failed";
+    const [blogStatuses, setBlogStatuses] = useState<Map<string, BlogStatus>>(
+        new Map()
+    );
+
+    // friendRequestTargets가 변경될 때 상태 초기화
+    useEffect(() => {
+        if (friendRequestTargets.length === 0) {
+            setBlogStatuses(new Map());
+        }
+    }, [friendRequestTargets.length]);
+
+    // 진행률 계산
+    const progressPercentage = useMemo(() => {
+        if (friendRequestTargets.length === 0) return 0;
+        const statuses = Array.from(blogStatuses.values());
+        const completedCount = statuses.filter(
+            (status) =>
+                status === "success" ||
+                status === "already-friend" ||
+                status === "already-requesting" ||
+                status === "failed"
+        ).length;
+        return Math.round((completedCount / friendRequestTargets.length) * 100);
+    }, [blogStatuses, friendRequestTargets.length]);
+
+    // 상태별 블로그 리스트
+    const blogsByStatus = useMemo(() => {
+        const result: {
+            success: BlogSearchResult[];
+            "already-friend": BlogSearchResult[];
+            "already-requesting": BlogSearchResult[];
+            failed: BlogSearchResult[];
+        } = {
+            success: [],
+            "already-friend": [],
+            "already-requesting": [],
+            failed: [],
+        };
+
+        friendRequestTargets.forEach((blog) => {
+            const status = blogStatuses.get(blog.url);
+            if (status && status in result) {
+                result[status as keyof typeof result].push(blog);
+            }
+        });
+
+        return result;
+    }, [friendRequestTargets, blogStatuses]);
 
     const handleMessageTypeChange = (type: string) => {
         setSelectedMessageType(type);
@@ -76,12 +158,20 @@ export default function FriendRequestSection({
 
     const handleLoginTest = async () => {
         if (!username.trim() || !password.trim()) {
-            onError("아이디와 비밀번호를 모두 입력해주세요.");
+            setLoginTestModalTitle("입력 오류");
+            setLoginTestModalMessage("아이디와 비밀번호를 모두 입력해주세요.");
+            setLoginTestModalType("error");
+            setLoginTestModalOpen(true);
             return;
         }
 
         if (friendRequestTargets.length === 0) {
-            onError("먼저 블로그를 검색하고 서이추 목록에 추가해주세요.");
+            setLoginTestModalTitle("입력 오류");
+            setLoginTestModalMessage(
+                "먼저 블로그를 검색하고 서이추 목록에 추가해주세요."
+            );
+            setLoginTestModalType("error");
+            setLoginTestModalOpen(true);
             return;
         }
 
@@ -96,7 +186,6 @@ export default function FriendRequestSection({
 
         setLoginTestLoading(true);
         onLoadingChange(true);
-        onError("");
 
         try {
             // useSocket에서 생성한 sessionId 사용 (항상 생성되므로 null 체크만)
@@ -147,6 +236,14 @@ export default function FriendRequestSection({
             }
 
             await logger.success(`✅ 로그인 테스트 성공: ${testBlog.title}`);
+
+            // 성공 모달 표시
+            setLoginTestModalTitle("로그인 테스트 성공");
+            setLoginTestModalMessage(
+                `✅ 로그인 테스트가 성공적으로 완료되었습니다.\n블로그: ${testBlog.title}`
+            );
+            setLoginTestModalType("success");
+            setLoginTestModalOpen(true);
         } catch (err) {
             // 중지된 경우에는 에러 표시하지 않음
             if (signal.aborted) {
@@ -161,9 +258,14 @@ export default function FriendRequestSection({
                 err instanceof Error
                     ? err.message
                     : "알 수 없는 오류가 발생했습니다.";
-            onError(errorMessage);
 
-            // 서버 측에서 이미 에러 로그를 출력하므로 클라이언트에서는 중복 로깅하지 않음
+            // 실패 모달 표시
+            setLoginTestModalTitle("로그인 테스트 실패");
+            setLoginTestModalMessage(
+                `❌ 로그인 테스트에 실패했습니다.\n\n${errorMessage}`
+            );
+            setLoginTestModalType("error");
+            setLoginTestModalOpen(true);
         } finally {
             if (!signal.aborted) {
                 setLoginTestLoading(false);
@@ -218,11 +320,38 @@ export default function FriendRequestSection({
                 `🤝 ${friendRequestTargets.length}개 블로그에 서로이웃 추가 요청을 시작합니다...`
             );
 
+            // 결과 상태 초기화: 모든 블로그를 "pending"으로 설정
+            setBlogStatuses(() => {
+                const newStatuses = new Map<string, BlogStatus>();
+                friendRequestTargets.forEach((blog) => {
+                    newStatuses.set(blog.url, "pending");
+                });
+                return newStatuses;
+            });
+
             const promises = friendRequestTargets.map(async (blog, index) => {
                 // 중지되었는지 확인
                 if (signal.aborted) {
-                    return { success: false, blog, index, error: "중지됨" };
+                    setBlogStatuses((prev) => {
+                        const newStatuses = new Map(prev);
+                        newStatuses.set(blog.url, "failed");
+                        return newStatuses;
+                    });
+                    return {
+                        success: false,
+                        blog,
+                        index,
+                        error: "중지됨",
+                        status: "failed" as const,
+                    };
                 }
+
+                // 상태를 "processing"으로 변경
+                setBlogStatuses((prev) => {
+                    const newStatuses = new Map(prev);
+                    newStatuses.set(blog.url, "processing");
+                    return newStatuses;
+                });
 
                 try {
                     await logger.info(
@@ -248,7 +377,18 @@ export default function FriendRequestSection({
 
                     // 중지되었는지 확인
                     if (signal.aborted) {
-                        return { success: false, blog, index, error: "중지됨" };
+                        setBlogStatuses((prev) => {
+                            const newStatuses = new Map(prev);
+                            newStatuses.set(blog.url, "failed");
+                            return newStatuses;
+                        });
+                        return {
+                            success: false,
+                            blog,
+                            index,
+                            error: "중지됨",
+                            status: "failed" as const,
+                        };
                     }
 
                     const data = await response.json();
@@ -259,34 +399,76 @@ export default function FriendRequestSection({
                             ? `${data.error}: ${data.details}`
                             : data.error ||
                               "서로이웃 추가 요청에 실패했습니다.";
+                        const status = data.status || "failed";
+                        setBlogStatuses((prev) => {
+                            const newStatuses = new Map(prev);
+                            newStatuses.set(blog.url, status as BlogStatus);
+                            return newStatuses;
+                        });
                         throw new Error(errorMessage);
                     }
+
+                    // API 응답에서 status 추출
+                    const status =
+                        data.status || (data.success ? "success" : "failed");
+                    setBlogStatuses((prev) => {
+                        const newStatuses = new Map(prev);
+                        newStatuses.set(blog.url, status as BlogStatus);
+                        return newStatuses;
+                    });
 
                     await logger.success(
                         `✅ 블로그 ${index + 1} 서로이웃 추가 완료: ${
                             blog.title
                         }`
                     );
-                    return { success: true, blog, index };
+                    return {
+                        success: true,
+                        blog,
+                        index,
+                        status: status as typeof status,
+                    };
                 } catch (error) {
                     // 중지된 경우
                     if (signal.aborted || error instanceof DOMException) {
                         await logger.info(
                             `⏸️ 블로그 ${index + 1} 처리 중지: ${blog.title}`
                         );
-                        return { success: false, blog, index, error: "중지됨" };
+                        setBlogStatuses((prev) => {
+                            const newStatuses = new Map(prev);
+                            newStatuses.set(blog.url, "failed");
+                            return newStatuses;
+                        });
+                        return {
+                            success: false,
+                            blog,
+                            index,
+                            error: "중지됨",
+                            status: "failed" as const,
+                        };
                     }
 
                     const errorMessage =
                         error instanceof Error
                             ? error.message
                             : "알 수 없는 오류";
+                    setBlogStatuses((prev) => {
+                        const newStatuses = new Map(prev);
+                        newStatuses.set(blog.url, "failed");
+                        return newStatuses;
+                    });
                     await logger.error(
                         `❌ 블로그 ${
                             index + 1
                         } 서로이웃 추가 실패: ${errorMessage}`
                     );
-                    return { success: false, blog, index, error: errorMessage };
+                    return {
+                        success: false,
+                        blog,
+                        index,
+                        error: errorMessage,
+                        status: "failed" as const,
+                    };
                 }
             });
 
@@ -635,7 +817,7 @@ export default function FriendRequestSection({
                                     </div>
                                 </div>
 
-                                <div className="max-h-64 overflow-y-auto space-y-2">
+                                <div className="h-64 overflow-y-auto space-y-2">
                                     {friendRequestTargets.map((blog, index) => (
                                         <div
                                             key={index}
@@ -712,63 +894,389 @@ export default function FriendRequestSection({
 
                         {/* 진행 상태 */}
                         <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                            <h5 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">
-                                📊 진행 상태
+                            <h5 className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-4">
+                                📊 서이추 진행 상태
                             </h5>
-                            <div className="space-y-2 text-xs">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-blue-700 dark:text-blue-300">
-                                        블로그 검색
+                            {/* 선형 프로그레스 바 */}
+                            <div className="mb-4">
+                                <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs text-gray-600 dark:text-gray-400">
+                                        전체 진행률
                                     </span>
-                                    <span
-                                        className={`px-2 py-1 rounded ${
-                                            searchResults.length > 0
-                                                ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
-                                                : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
-                                        }`}
-                                    >
-                                        {searchResults.length > 0
-                                            ? `${searchResults.length}개 완료`
-                                            : "대기"}
+                                    <span className="text-xs font-medium text-blue-800 dark:text-blue-200">
+                                        {progressPercentage}%
                                     </span>
                                 </div>
+                                <Progress
+                                    value={progressPercentage}
+                                    className="h-2"
+                                />
+                            </div>
+                            <div className="space-y-3 text-xs">
+                                {/* 첫 번째 줄: 블로그 갯수 | 그래프 */}
                                 <div className="flex items-center justify-between">
-                                    <span className="text-blue-700 dark:text-blue-300">
-                                        로그인 정보
-                                    </span>
-                                    <span
-                                        className={`px-2 py-1 rounded ${
-                                            username.trim() && password.trim()
-                                                ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
-                                                : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
-                                        }`}
-                                    >
-                                        {username.trim() && password.trim()
-                                            ? "완료"
-                                            : "대기"}
-                                    </span>
+                                    {/* 블로그 대상 수 */}
+                                    <div className="flex-1">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-blue-700 dark:text-blue-300 font-medium">
+                                                블로그 갯수
+                                            </span>
+                                            <span className="px-2 py-1 rounded bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
+                                                {friendRequestTargets.length}개
+                                            </span>
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <div className="flex items-center justify-between pl-2">
+                                                <span className="text-gray-600 dark:text-gray-400">
+                                                    대기중:
+                                                </span>
+                                                <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                                                    {
+                                                        Array.from(
+                                                            blogStatuses.values()
+                                                        ).filter(
+                                                            (status) =>
+                                                                status ===
+                                                                "pending"
+                                                        ).length
+                                                    }
+                                                    개
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center justify-between pl-2">
+                                                <span className="text-gray-600 dark:text-gray-400">
+                                                    진행중:
+                                                </span>
+                                                <span className="px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200">
+                                                    {
+                                                        Array.from(
+                                                            blogStatuses.values()
+                                                        ).filter(
+                                                            (status) =>
+                                                                status ===
+                                                                "processing"
+                                                        ).length
+                                                    }
+                                                    개
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {/* 원형 프로그레스 (RadialBarChart) */}
                                 </div>
-                                <div className="flex items-center justify-between">
-                                    <span className="text-blue-700 dark:text-blue-300">
-                                        서로이웃 추가 대상
-                                    </span>
-                                    <span
-                                        className={`px-2 py-1 rounded ${
-                                            friendRequestTargets.length > 0
-                                                ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
-                                                : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
-                                        }`}
+
+                                {/* 두 번째 줄: 결과 */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-blue-700 dark:text-blue-300 font-medium">
+                                            결과
+                                        </span>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <div className="flex items-center justify-between pl-2">
+                                            <span className="text-gray-600 dark:text-gray-400">
+                                                서이추 성공
+                                            </span>
+                                            <span className="px-2 py-0.5 rounded bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200">
+                                                {
+                                                    Array.from(
+                                                        blogStatuses.values()
+                                                    ).filter(
+                                                        (status) =>
+                                                            status === "success"
+                                                    ).length
+                                                }
+                                                개
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center justify-between pl-2">
+                                            <span className="text-gray-600 dark:text-gray-400">
+                                                이미 이웃입니다.
+                                            </span>
+                                            <span className="px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
+                                                {
+                                                    Array.from(
+                                                        blogStatuses.values()
+                                                    ).filter(
+                                                        (status) =>
+                                                            status ===
+                                                            "already-friend"
+                                                    ).length
+                                                }
+                                                개
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center justify-between pl-2">
+                                            <span className="text-gray-600 dark:text-gray-400">
+                                                신청중입니다.
+                                            </span>
+                                            <span className="px-2 py-0.5 rounded bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200">
+                                                {
+                                                    Array.from(
+                                                        blogStatuses.values()
+                                                    ).filter(
+                                                        (status) =>
+                                                            status ===
+                                                            "already-requesting"
+                                                    ).length
+                                                }
+                                                개
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center justify-between pl-2">
+                                            <span className="text-gray-600 dark:text-gray-400">
+                                                실패입니다.
+                                            </span>
+                                            <span className="px-2 py-0.5 rounded bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200">
+                                                {
+                                                    Array.from(
+                                                        blogStatuses.values()
+                                                    ).filter(
+                                                        (status) =>
+                                                            status === "failed"
+                                                    ).length
+                                                }
+                                                개
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* 세 번째 줄: 결과 상세 */}
+                                <div>
+                                    <div className="mb-2">
+                                        <span className="text-blue-700 dark:text-blue-300 font-medium">
+                                            결과 상세
+                                        </span>
+                                    </div>
+                                    <Accordion
+                                        type="single"
+                                        collapsible
+                                        className="w-full"
                                     >
-                                        {friendRequestTargets.length > 0
-                                            ? `${friendRequestTargets.length}개`
-                                            : "대기"}
-                                    </span>
+                                        {/* 서이추 성공 */}
+                                        {blogsByStatus.success.length > 0 && (
+                                            <AccordionItem value="success">
+                                                <AccordionTrigger className="text-xs py-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-green-600 dark:text-green-400 font-medium">
+                                                            서이추 성공
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-xs">
+                                                            {
+                                                                blogsByStatus
+                                                                    .success
+                                                                    .length
+                                                            }
+                                                            개
+                                                        </span>
+                                                    </div>
+                                                </AccordionTrigger>
+                                                <AccordionContent>
+                                                    <div className="max-h-48 overflow-y-auto space-y-1.5 pr-2">
+                                                        {blogsByStatus.success.map(
+                                                            (blog, index) => (
+                                                                <div
+                                                                    key={index}
+                                                                    className="flex items-center justify-between p-2 rounded bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800"
+                                                                >
+                                                                    <a
+                                                                        href={
+                                                                            blog.url
+                                                                        }
+                                                                        target="_blank"
+                                                                        rel="noopener noreferrer"
+                                                                        className="text-xs text-green-700 dark:text-green-300 hover:underline truncate flex-1"
+                                                                        title={
+                                                                            blog.title
+                                                                        }
+                                                                    >
+                                                                        {
+                                                                            blog.title
+                                                                        }
+                                                                    </a>
+                                                                </div>
+                                                            )
+                                                        )}
+                                                    </div>
+                                                </AccordionContent>
+                                            </AccordionItem>
+                                        )}
+
+                                        {/* 이미 이웃 */}
+                                        {blogsByStatus["already-friend"]
+                                            .length > 0 && (
+                                            <AccordionItem value="already-friend">
+                                                <AccordionTrigger className="text-xs py-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-blue-600 dark:text-blue-400 font-medium">
+                                                            이미 이웃입니다.
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs">
+                                                            {
+                                                                blogsByStatus[
+                                                                    "already-friend"
+                                                                ].length
+                                                            }
+                                                            개
+                                                        </span>
+                                                    </div>
+                                                </AccordionTrigger>
+                                                <AccordionContent>
+                                                    <div className="max-h-48 overflow-y-auto space-y-1.5 pr-2">
+                                                        {blogsByStatus[
+                                                            "already-friend"
+                                                        ].map((blog, index) => (
+                                                            <div
+                                                                key={index}
+                                                                className="flex items-center justify-between p-2 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800"
+                                                            >
+                                                                <a
+                                                                    href={
+                                                                        blog.url
+                                                                    }
+                                                                    target="_blank"
+                                                                    rel="noopener noreferrer"
+                                                                    className="text-xs text-blue-700 dark:text-blue-300 hover:underline truncate flex-1"
+                                                                    title={
+                                                                        blog.title
+                                                                    }
+                                                                >
+                                                                    {blog.title}
+                                                                </a>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </AccordionContent>
+                                            </AccordionItem>
+                                        )}
+
+                                        {/* 신청중 */}
+                                        {blogsByStatus["already-requesting"]
+                                            .length > 0 && (
+                                            <AccordionItem value="already-requesting">
+                                                <AccordionTrigger className="text-xs py-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-purple-600 dark:text-purple-400 font-medium">
+                                                            신청중입니다.
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 text-xs">
+                                                            {
+                                                                blogsByStatus[
+                                                                    "already-requesting"
+                                                                ].length
+                                                            }
+                                                            개
+                                                        </span>
+                                                    </div>
+                                                </AccordionTrigger>
+                                                <AccordionContent>
+                                                    <div className="max-h-48 overflow-y-auto space-y-1.5 pr-2">
+                                                        {blogsByStatus[
+                                                            "already-requesting"
+                                                        ].map((blog, index) => (
+                                                            <div
+                                                                key={index}
+                                                                className="flex items-center justify-between p-2 rounded bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800"
+                                                            >
+                                                                <a
+                                                                    href={
+                                                                        blog.url
+                                                                    }
+                                                                    target="_blank"
+                                                                    rel="noopener noreferrer"
+                                                                    className="text-xs text-purple-700 dark:text-purple-300 hover:underline truncate flex-1"
+                                                                    title={
+                                                                        blog.title
+                                                                    }
+                                                                >
+                                                                    {blog.title}
+                                                                </a>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </AccordionContent>
+                                            </AccordionItem>
+                                        )}
+
+                                        {/* 실패 */}
+                                        {blogsByStatus.failed.length > 0 && (
+                                            <AccordionItem value="failed">
+                                                <AccordionTrigger className="text-xs py-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-red-600 dark:text-red-400 font-medium">
+                                                            실패입니다.
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 text-xs">
+                                                            {
+                                                                blogsByStatus
+                                                                    .failed
+                                                                    .length
+                                                            }
+                                                            개
+                                                        </span>
+                                                    </div>
+                                                </AccordionTrigger>
+                                                <AccordionContent>
+                                                    <div className="max-h-48 overflow-y-auto space-y-1.5 pr-2">
+                                                        {blogsByStatus.failed.map(
+                                                            (blog, index) => (
+                                                                <div
+                                                                    key={index}
+                                                                    className="flex items-center justify-between p-2 rounded bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800"
+                                                                >
+                                                                    <a
+                                                                        href={
+                                                                            blog.url
+                                                                        }
+                                                                        target="_blank"
+                                                                        rel="noopener noreferrer"
+                                                                        className="text-xs text-red-700 dark:text-red-300 hover:underline truncate flex-1"
+                                                                        title={
+                                                                            blog.title
+                                                                        }
+                                                                    >
+                                                                        {
+                                                                            blog.title
+                                                                        }
+                                                                    </a>
+                                                                </div>
+                                                            )
+                                                        )}
+                                                    </div>
+                                                </AccordionContent>
+                                            </AccordionItem>
+                                        )}
+                                    </Accordion>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
+
+            {/* 로그인 테스트 결과 모달 */}
+            <Dialog
+                open={loginTestModalOpen}
+                onOpenChange={setLoginTestModalOpen}
+            >
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle
+                            className={
+                                loginTestModalType === "success"
+                                    ? "text-green-600 dark:text-green-400"
+                                    : "text-red-600 dark:text-red-400"
+                            }
+                        >
+                            {loginTestModalTitle}
+                        </DialogTitle>
+                        <DialogDescription className="whitespace-pre-line pt-2 text-sm">
+                            {loginTestModalMessage}
+                        </DialogDescription>
+                    </DialogHeader>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
