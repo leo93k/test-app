@@ -9,7 +9,7 @@ interface SettingsState {
 }
 
 const initialState: SettingsState = {
-    maxConcurrent: 10,
+    maxConcurrent: 5,
     autoCloseDelay: 0.5,
     logRetentionDays: 7,
     enableAutoRefresh: true,

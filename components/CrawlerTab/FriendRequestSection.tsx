@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Logger } from "@/service/logger";
 import { useSocket } from "@/lib/hooks/useSocket";
+import { useAppSelector } from "@/lib/hooks";
 import type { BlogSearchResult } from "./types";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -58,6 +59,11 @@ export default function FriendRequestSection({
 }: FriendRequestSectionProps) {
     // Socket.io 연결 상태 및 sessionId 가져오기
     const { isConnected, sessionId } = useSocket();
+
+    // Redux에서 최대 동시 실행 브라우저 수 가져오기
+    const maxConcurrent = useAppSelector(
+        (state) => state.settings.maxConcurrent
+    );
 
     // 프로덕션 환경에서는 headless를 true로 고정
     const effectiveHeadless = isProduction ? true : headless;
@@ -334,206 +340,305 @@ export default function FriendRequestSection({
                 return newStatuses;
             });
 
-            const promises = friendRequestTargets.map(async (blog, index) => {
-                // 중지되었는지 확인
-                if (signal.aborted) {
-                    setBlogStatuses((prev) => {
-                        const newStatuses = new Map(prev);
-                        newStatuses.set(blog.url, "failed");
-                        return newStatuses;
-                    });
-                    setBlogErrors((prev) => {
-                        const newErrors = new Map(prev);
-                        newErrors.set(blog.url, "중지됨");
-                        return newErrors;
-                    });
-                    return {
-                        success: false,
-                        blog,
-                        index,
-                        error: "중지됨",
-                        status: "failed" as const,
-                    };
-                }
+            // 큐 시스템: 최대 동시 실행 수만큼만 병렬 처리
+            const results: Array<{
+                status: "fulfilled" | "rejected";
+                value?: {
+                    success: boolean;
+                    blog: BlogSearchResult;
+                    index: number;
+                    error?: string;
+                    status?:
+                        | "success"
+                        | "already-friend"
+                        | "already-requesting"
+                        | "failed";
+                };
+                reason?: Error | unknown;
+            }> = [];
 
-                // 상태를 "processing"으로 변경
-                setBlogStatuses((prev) => {
-                    const newStatuses = new Map(prev);
-                    newStatuses.set(blog.url, "processing");
-                    return newStatuses;
-                });
+            let runningCount = 0;
+            let currentIndex = 0;
 
-                try {
-                    await logger.info(
-                        `📝 블로그 ${index + 1} 처리 시작: ${blog.title}`
-                    );
-
-                    const response = await fetch("/api/crawl", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                        },
-                        body: JSON.stringify({
-                            url: blog.url,
-                            username: username.trim(),
-                            password: password.trim(),
-                            message: friendRequestMessage.trim(),
-                            headless: effectiveHeadless,
-                            friendRequest: true,
-                            sessionId: sessionId, // 클라이언트 sessionId 전송
-                        }),
-                        signal,
-                    });
-
+            // 큐 처리 함수
+            const processQueue = async () => {
+                while (currentIndex < friendRequestTargets.length) {
                     // 중지되었는지 확인
                     if (signal.aborted) {
-                        setBlogStatuses((prev) => {
-                            const newStatuses = new Map(prev);
-                            newStatuses.set(blog.url, "failed");
-                            return newStatuses;
-                        });
-                        setBlogErrors((prev) => {
-                            const newErrors = new Map(prev);
-                            newErrors.set(blog.url, "중지됨");
-                            return newErrors;
-                        });
-                        return {
-                            success: false,
-                            blog,
-                            index,
-                            error: "중지됨",
-                            status: "failed" as const,
-                        };
+                        // 남은 모든 블로그를 실패 처리
+                        while (currentIndex < friendRequestTargets.length) {
+                            const blog = friendRequestTargets[currentIndex];
+                            setBlogStatuses((prev) => {
+                                const newStatuses = new Map(prev);
+                                newStatuses.set(blog.url, "failed");
+                                return newStatuses;
+                            });
+                            setBlogErrors((prev) => {
+                                const newErrors = new Map(prev);
+                                newErrors.set(blog.url, "중지됨");
+                                return newErrors;
+                            });
+                            results.push({
+                                status: "fulfilled",
+                                value: {
+                                    success: false,
+                                    blog,
+                                    index: currentIndex,
+                                    error: "중지됨",
+                                    status: "failed",
+                                },
+                            });
+                            currentIndex++;
+                        }
+                        break;
                     }
 
-                    const data = await response.json();
-
-                    if (!response.ok) {
-                        // 더 구체적인 에러 메시지가 있으면 사용
-                        const errorMessage = data.details
-                            ? `${data.error}: ${data.details}`
-                            : data.error ||
-                              "서로이웃 추가 요청에 실패했습니다.";
-                        const status = data.status || "failed";
-                        setBlogStatuses((prev) => {
-                            const newStatuses = new Map(prev);
-                            newStatuses.set(blog.url, status as BlogStatus);
-                            return newStatuses;
-                        });
-                        setBlogErrors((prev) => {
-                            const newErrors = new Map(prev);
-                            newErrors.set(blog.url, errorMessage);
-                            return newErrors;
-                        });
-                        throw new Error(errorMessage);
-                    }
-
-                    // API 응답에서 status 추출
-                    const status =
-                        data.status || (data.success ? "success" : "failed");
-
-                    // status가 "failed"이거나 success가 false인 경우 에러 처리
-                    if (status === "failed" || !data.success) {
-                        const errorMessage =
-                            data.error || "서로이웃 추가에 실패했습니다.";
-                        setBlogStatuses((prev) => {
-                            const newStatuses = new Map(prev);
-                            newStatuses.set(blog.url, "failed");
-                            return newStatuses;
-                        });
-                        setBlogErrors((prev) => {
-                            const newErrors = new Map(prev);
-                            newErrors.set(blog.url, errorMessage);
-                            return newErrors;
-                        });
-                        await logger.error(
-                            `❌ 블로그 ${
-                                index + 1
-                            } 서로이웃 추가 실패: ${errorMessage}`
+                    // 최대 동시 실행 수에 도달하면 대기
+                    if (runningCount >= maxConcurrent) {
+                        await new Promise((resolve) =>
+                            setTimeout(resolve, 100)
                         );
-                        return {
-                            success: false,
-                            blog,
-                            index,
-                            error: errorMessage,
-                            status: "failed" as const,
-                        };
+                        continue;
                     }
 
-                    setBlogStatuses((prev) => {
-                        const newStatuses = new Map(prev);
-                        newStatuses.set(blog.url, status as BlogStatus);
-                        return newStatuses;
-                    });
+                    // 다음 블로그 처리 시작
+                    const blog = friendRequestTargets[currentIndex];
+                    const index = currentIndex;
+                    currentIndex++;
+                    runningCount++;
 
-                    await logger.success(
-                        `✅ 블로그 ${index + 1} 서로이웃 추가 완료: ${
-                            blog.title
-                        }`
-                    );
-                    return {
-                        success: true,
-                        blog,
-                        index,
-                        status: status as typeof status,
-                    };
-                } catch (error) {
-                    // 중지된 경우
-                    if (signal.aborted || error instanceof DOMException) {
-                        await logger.info(
-                            `⏸️ 블로그 ${index + 1} 처리 중지: ${blog.title}`
-                        );
-                        setBlogStatuses((prev) => {
-                            const newStatuses = new Map(prev);
-                            newStatuses.set(blog.url, "failed");
-                            return newStatuses;
-                        });
-                        setBlogErrors((prev) => {
-                            const newErrors = new Map(prev);
-                            newErrors.set(blog.url, "중지됨");
-                            return newErrors;
-                        });
-                        return {
-                            success: false,
-                            blog,
-                            index,
-                            error: "중지됨",
-                            status: "failed" as const,
-                        };
-                    }
+                    // 블로그 처리 함수
+                    const processBlog = async () => {
+                        try {
+                            // 중지되었는지 확인
+                            if (signal.aborted) {
+                                setBlogStatuses((prev) => {
+                                    const newStatuses = new Map(prev);
+                                    newStatuses.set(blog.url, "failed");
+                                    return newStatuses;
+                                });
+                                setBlogErrors((prev) => {
+                                    const newErrors = new Map(prev);
+                                    newErrors.set(blog.url, "중지됨");
+                                    return newErrors;
+                                });
+                                return {
+                                    success: false,
+                                    blog,
+                                    index,
+                                    error: "중지됨",
+                                    status: "failed" as const,
+                                };
+                            }
 
-                    const errorMessage =
-                        error instanceof Error
-                            ? error.message
-                            : "알 수 없는 오류";
-                    setBlogStatuses((prev) => {
-                        const newStatuses = new Map(prev);
-                        newStatuses.set(blog.url, "failed");
-                        return newStatuses;
-                    });
-                    setBlogErrors((prev) => {
-                        const newErrors = new Map(prev);
-                        newErrors.set(blog.url, errorMessage);
-                        return newErrors;
-                    });
-                    await logger.error(
-                        `❌ 블로그 ${
-                            index + 1
-                        } 서로이웃 추가 실패: ${errorMessage}`
-                    );
-                    return {
-                        success: false,
-                        blog,
-                        index,
-                        error: errorMessage,
-                        status: "failed" as const,
+                            // 상태를 "processing"으로 변경
+                            setBlogStatuses((prev) => {
+                                const newStatuses = new Map(prev);
+                                newStatuses.set(blog.url, "processing");
+                                return newStatuses;
+                            });
+
+                            await logger.info(
+                                `📝 블로그 ${index + 1} 처리 시작: ${
+                                    blog.title
+                                }`
+                            );
+
+                            const response = await fetch("/api/crawl", {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/json",
+                                },
+                                body: JSON.stringify({
+                                    url: blog.url,
+                                    username: username.trim(),
+                                    password: password.trim(),
+                                    message: friendRequestMessage.trim(),
+                                    headless: effectiveHeadless,
+                                    friendRequest: true,
+                                    sessionId: sessionId,
+                                }),
+                                signal,
+                            });
+
+                            // 중지되었는지 확인
+                            if (signal.aborted) {
+                                setBlogStatuses((prev) => {
+                                    const newStatuses = new Map(prev);
+                                    newStatuses.set(blog.url, "failed");
+                                    return newStatuses;
+                                });
+                                setBlogErrors((prev) => {
+                                    const newErrors = new Map(prev);
+                                    newErrors.set(blog.url, "중지됨");
+                                    return newErrors;
+                                });
+                                return {
+                                    success: false,
+                                    blog,
+                                    index,
+                                    error: "중지됨",
+                                    status: "failed" as const,
+                                };
+                            }
+
+                            const data = await response.json();
+
+                            if (!response.ok) {
+                                const errorMessage = data.details
+                                    ? `${data.error}: ${data.details}`
+                                    : data.error ||
+                                      "서로이웃 추가 요청에 실패했습니다.";
+                                const status = data.status || "failed";
+                                setBlogStatuses((prev) => {
+                                    const newStatuses = new Map(prev);
+                                    newStatuses.set(
+                                        blog.url,
+                                        status as BlogStatus
+                                    );
+                                    return newStatuses;
+                                });
+                                setBlogErrors((prev) => {
+                                    const newErrors = new Map(prev);
+                                    newErrors.set(blog.url, errorMessage);
+                                    return newErrors;
+                                });
+                                throw new Error(errorMessage);
+                            }
+
+                            const status =
+                                data.status ||
+                                (data.success ? "success" : "failed");
+
+                            if (status === "failed" || !data.success) {
+                                const errorMessage =
+                                    data.error ||
+                                    "서로이웃 추가에 실패했습니다.";
+                                setBlogStatuses((prev) => {
+                                    const newStatuses = new Map(prev);
+                                    newStatuses.set(blog.url, "failed");
+                                    return newStatuses;
+                                });
+                                setBlogErrors((prev) => {
+                                    const newErrors = new Map(prev);
+                                    newErrors.set(blog.url, errorMessage);
+                                    return newErrors;
+                                });
+                                await logger.error(
+                                    `❌ 블로그 ${
+                                        index + 1
+                                    } 서로이웃 추가 실패: ${errorMessage}`
+                                );
+                                return {
+                                    success: false,
+                                    blog,
+                                    index,
+                                    error: errorMessage,
+                                    status: "failed" as const,
+                                };
+                            }
+
+                            setBlogStatuses((prev) => {
+                                const newStatuses = new Map(prev);
+                                newStatuses.set(blog.url, status as BlogStatus);
+                                return newStatuses;
+                            });
+
+                            await logger.success(
+                                `✅ 블로그 ${index + 1} 서로이웃 추가 완료: ${
+                                    blog.title
+                                }`
+                            );
+                            return {
+                                success: true,
+                                blog,
+                                index,
+                                status: status as typeof status,
+                            };
+                        } catch (error) {
+                            if (
+                                signal.aborted ||
+                                error instanceof DOMException
+                            ) {
+                                await logger.info(
+                                    `⏸️ 블로그 ${index + 1} 처리 중지: ${
+                                        blog.title
+                                    }`
+                                );
+                                setBlogStatuses((prev) => {
+                                    const newStatuses = new Map(prev);
+                                    newStatuses.set(blog.url, "failed");
+                                    return newStatuses;
+                                });
+                                setBlogErrors((prev) => {
+                                    const newErrors = new Map(prev);
+                                    newErrors.set(blog.url, "중지됨");
+                                    return newErrors;
+                                });
+                                return {
+                                    success: false,
+                                    blog,
+                                    index,
+                                    error: "중지됨",
+                                    status: "failed" as const,
+                                };
+                            }
+
+                            const errorMessage =
+                                error instanceof Error
+                                    ? error.message
+                                    : "알 수 없는 오류";
+                            setBlogStatuses((prev) => {
+                                const newStatuses = new Map(prev);
+                                newStatuses.set(blog.url, "failed");
+                                return newStatuses;
+                            });
+                            setBlogErrors((prev) => {
+                                const newErrors = new Map(prev);
+                                newErrors.set(blog.url, errorMessage);
+                                return newErrors;
+                            });
+                            await logger.error(
+                                `❌ 블로그 ${
+                                    index + 1
+                                } 서로이웃 추가 실패: ${errorMessage}`
+                            );
+                            return {
+                                success: false,
+                                blog,
+                                index,
+                                error: errorMessage,
+                                status: "failed" as const,
+                            };
+                        } finally {
+                            runningCount--;
+                        }
                     };
+
+                    // 블로그 처리 시작 (비동기로 실행)
+                    processBlog()
+                        .then((result) => {
+                            results.push({
+                                status: "fulfilled",
+                                value: result,
+                            });
+                        })
+                        .catch((error) => {
+                            results.push({
+                                status: "rejected",
+                                reason: error,
+                            });
+                        });
                 }
-            });
 
-            ongoingRequestsRef.current = promises;
+                // 모든 작업이 완료될 때까지 대기
+                while (runningCount > 0) {
+                    await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+            };
 
-            const results = await Promise.allSettled(promises);
+            // 큐 처리 시작
+            await processQueue();
 
             // 중지되었는지 확인
             if (signal.aborted) {
@@ -544,10 +649,12 @@ export default function FriendRequestSection({
 
             // 성공/실패 분리
             const successResults = results.filter(
-                (r) => r.status === "fulfilled" && r.value.success
+                (r) => r.status === "fulfilled" && r.value?.success
             );
             const failResults = results.filter(
-                (r) => r.status === "rejected" || !r.value?.success
+                (r) =>
+                    r.status === "rejected" ||
+                    (r.status === "fulfilled" && !r.value?.success)
             );
 
             const successCount = successResults.length;
@@ -556,12 +663,12 @@ export default function FriendRequestSection({
             // 성공한 블로그 리스트
             const successList = successResults
                 .map((r) => {
-                    if (r.status === "fulfilled" && r.value.success) {
+                    if (r.status === "fulfilled" && r.value?.success) {
                         return r.value.blog?.title || "알 수 없음";
                     }
                     return null;
                 })
-                .filter((title) => title !== null)
+                .filter((title): title is string => title !== null)
                 .join(", ");
 
             await logger.info(

@@ -122,11 +122,11 @@ function SettingsContent() {
                                     )
                                 }
                                 min="1"
-                                max="50"
+                                max="10"
                                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
                             />
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                시스템 부하를 고려하여 1-50 사이로 설정하세요
+                                시스템 부하를 고려하여 1-10 사이로 설정하세요
                             </p>
                         </div>
                         <div>
