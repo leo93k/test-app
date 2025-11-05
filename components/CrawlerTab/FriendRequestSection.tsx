@@ -580,10 +580,10 @@ export default function FriendRequestSection({
                                 };
                             }
 
-                            // 상태를 "processing"으로 변경
+                            // 상태를 "queued"로 변경 (큐에 추가하기 전)
                             setBlogStatuses((prev) => {
                                 const newStatuses = new Map(prev);
-                                newStatuses.set(blog.url, "processing");
+                                newStatuses.set(blog.url, "queued");
                                 return newStatuses;
                             });
 
@@ -644,8 +644,6 @@ export default function FriendRequestSection({
 
                             const queueData = await addResponse.json();
 
-                            // 큐에 추가 완료 - "queued" 상태로 이미 설정됨
-
                             // 중지되었는지 확인
                             if (signal.aborted) {
                                 setBlogStatuses((prev) => {
@@ -667,15 +665,16 @@ export default function FriendRequestSection({
                                 };
                             }
 
-                            // 큐에 추가된 경우 즉시 처리 완료 상태로 표시
+                            // 큐에 추가 완료 - "processing"으로 변경 (서버에서 처리 중)
                             // 실제 작업은 서버에서 비동기로 처리되며, 결과는 소켓 로그로 전달됨
                             await logger.info(
                                 `✅ 큐에 작업 추가 완료: ${blog.title} (Queue ID: ${queueData.queueId})`
                             );
 
+                            // 큐에 추가된 후 "processing" 상태로 변경 (서버에서 처리 중)
                             setBlogStatuses((prev) => {
                                 const newStatuses = new Map(prev);
-                                newStatuses.set(blog.url, "queued");
+                                newStatuses.set(blog.url, "processing");
                                 return newStatuses;
                             });
 
@@ -1227,22 +1226,10 @@ export default function FriendRequestSection({
                                         <div className="space-y-1.5">
                                             <div className="flex items-center justify-between pl-2">
                                                 <span className="text-gray-600 dark:text-gray-400">
-                                                    대기중/큐:
+                                                    남은 작업:
                                                 </span>
-                                                <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
-                                                    {statusCounts.pending +
-                                                        statusCounts.queued}
-                                                    개
-                                                </span>
-                                            </div>
-                                            <div className="flex items-center justify-between pl-2">
-                                                <span className="text-gray-600 dark:text-gray-400">
-                                                    진행중:
-                                                </span>
-                                                <span className="px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200">
-                                                    {statusCounts.processing +
-                                                        statusCounts.queued}
-                                                    개
+                                                <span className="px-2 py-0.5 rounded bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 font-medium">
+                                                    {statusCounts.processing}개
                                                 </span>
                                             </div>
                                             <div className="flex items-center justify-between pl-2">

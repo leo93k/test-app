@@ -65,6 +65,7 @@ class ServerQueue {
     /**
      * 큐 처리 (비동기)
      * Race Condition 방지를 위해 동시 실행을 방지합니다.
+     * 최대 동시 실행 수까지 작업을 병렬로 시작합니다.
      */
     private async processQueue(): Promise<void> {
         // 이미 처리 중이면 중복 실행 방지
@@ -89,42 +90,52 @@ class ServerQueue {
         this.isProcessing = true;
 
         try {
-            // 큐에서 아이템 가져오기 (원자적 연산)
-            const item = this.queue.shift();
-            if (!item) {
-                this.isProcessing = false;
-                return;
+            // 최대 동시 실행 수까지 작업을 시작할 수 있는 만큼 시작
+            while (
+                this.running.size < this.maxConcurrent &&
+                this.queue.length > 0
+            ) {
+                // 큐에서 아이템 가져오기 (원자적 연산)
+                const item = this.queue.shift();
+                if (!item) {
+                    break;
+                }
+
+                // 실행 중인 작업에 추가 (원자적 연산)
+                this.running.set(item.id, item);
+                console.log(
+                    `[Queue] 작업 시작: ${item.id}, 큐 길이: ${this.queue.length}, 실행 중: ${this.running.size}, running Map 크기: ${this.running.size}`
+                );
+                console.log(
+                    `[Queue] running Map 내용: ${Array.from(
+                        this.running.keys()
+                    ).join(", ")}`
+                );
+
+                // 비동기로 실행 (await하지 않음)
+                // 실행 중인 작업은 running Map에 유지됨
+                this.executeBrowser(item)
+                    .then(() => {
+                        console.log(
+                            `[Queue] 작업 완료: ${item.id}, 실행 중: ${this.running.size}`
+                        );
+                        this.running.delete(item.id);
+                        // 작업 완료 후 다음 아이템 처리 시도
+                        setTimeout(() => this.processQueue(), 100);
+                    })
+                    .catch((error) => {
+                        console.error(`[Queue] 작업 실패: ${item.id}`, error);
+                        this.running.delete(item.id);
+                        // 작업 실패 후 다음 아이템 처리 시도
+                        setTimeout(() => this.processQueue(), 100);
+                    });
             }
-
-            // 실행 중인 작업에 추가 (원자적 연산)
-            this.running.set(item.id, item);
-            console.log(
-                `[Queue] 작업 시작: ${item.id}, 큐 길이: ${this.queue.length}, 실행 중: ${this.running.size}`
-            );
-
-            // 처리 플래그 해제 (다음 항목 처리 가능)
-            this.isProcessing = false;
-
-            // 비동기로 실행 (await하지 않음)
-            this.executeBrowser(item)
-                .then(() => {
-                    console.log(
-                        `[Queue] 작업 완료: ${item.id}, 실행 중: ${this.running.size}`
-                    );
-                    this.running.delete(item.id);
-                    // 다음 아이템 처리
-                    setTimeout(() => this.processQueue(), 100);
-                })
-                .catch((error) => {
-                    console.error(`[Queue] 작업 실패: ${item.id}`, error);
-                    this.running.delete(item.id);
-                    // 다음 아이템 처리
-                    setTimeout(() => this.processQueue(), 100);
-                });
         } catch (error) {
             // 오류 발생 시 처리 플래그 해제
-            this.isProcessing = false;
             console.error(`[Queue] 큐 처리 중 오류:`, error);
+        } finally {
+            // 처리 플래그 해제 (다음 항목 처리 가능)
+            this.isProcessing = false;
         }
     }
 
@@ -132,8 +143,35 @@ class ServerQueue {
      * 브라우저 실행 (내부 함수)
      */
     private async executeBrowser(item: QueueItem): Promise<void> {
+        // 실행 시작 로그
+        console.log(
+            `[Queue] executeBrowser 시작: ${item.id}, 현재 실행 중: ${
+                this.running.size
+            }, running Map에 있는지: ${this.running.has(item.id)}`
+        );
+
+        // running Map에 작업이 있는지 확인 (무조건 있어야 함)
+        if (!this.running.has(item.id)) {
+            console.warn(
+                `[Queue] 경고: ${item.id}가 running Map에 없습니다. 다시 추가합니다.`
+            );
+            this.running.set(item.id, item);
+        }
+
+        // 실행 중인지 확인하기 위한 주기적 로그 (실제로는 제거)
+        const statusCheckInterval = setInterval(() => {
+            console.log(
+                `[Queue] executeBrowser 실행 중: ${item.id}, 실행 중: ${
+                    this.running.size
+                }, running Map에 있는지: ${this.running.has(item.id)}`
+            );
+        }, 5000); // 5초마다 체크
+
         try {
             // 크롤링 실행 서비스 직접 호출
+            console.log(
+                `[Queue] executeCrawl 호출 전: ${item.id}, 실행 중: ${this.running.size}`
+            );
             const { executeCrawl } = await import("../crawler/crawlExecutor");
             const result = await executeCrawl({
                 url: item.url,
@@ -145,6 +183,14 @@ class ServerQueue {
                 message: item.message || "",
                 sessionId: item.sessionId,
             });
+            console.log(
+                `[Queue] executeCrawl 완료: ${item.id}, 실행 중: ${
+                    this.running.size
+                }, 결과: ${result.success ? "성공" : "실패"}`
+            );
+
+            // 상태 체크 인터벌 정리
+            clearInterval(statusCheckInterval);
 
             // 작업 완료 결과를 소켓으로 전송
             if (item.sessionId) {
@@ -191,6 +237,8 @@ class ServerQueue {
                 throw new Error(result.error || "크롤링 실행 실패");
             }
         } catch (error) {
+            // 상태 체크 인터벌 정리 (에러 발생 시에도)
+            clearInterval(statusCheckInterval);
             console.error(`[Queue] 작업 실행 오류: ${item.id}`, error);
 
             // 에러도 소켓으로 전송
@@ -238,11 +286,21 @@ class ServerQueue {
      * 큐 상태 조회
      */
     getQueueStatus(): QueueStatus {
-        return {
+        const status = {
             queueLength: this.queue.length,
             runningCount: this.running.size,
             maxConcurrent: this.maxConcurrent,
         };
+        // 디버깅을 위한 로그
+        console.log(
+            `[Queue Status] 큐 길이: ${status.queueLength}, 실행 중: ${status.runningCount}, 최대: ${status.maxConcurrent}`
+        );
+        console.log(
+            `[Queue Status] 실행 중인 작업 ID: ${Array.from(
+                this.running.keys()
+            ).join(", ")}`
+        );
+        return status;
     }
 
     /**
