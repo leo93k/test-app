@@ -5,7 +5,10 @@ import { usePathname } from "next/navigation";
 export default function Navigation() {
     const pathname = usePathname();
 
-    const navItems = [
+    // 개발 환경인지 확인
+    const isDev = process.env.NODE_ENV !== "production";
+
+    const allNavItems = [
         {
             href: "/",
             name: "홈",
@@ -25,12 +28,22 @@ export default function Navigation() {
             description: "셀레니움 브라우저",
         },
         {
+            href: "/monitoring",
+            name: "모니터링",
+            icon: "📊",
+            description: "서버 큐 모니터링",
+            devOnly: true, // 개발 환경에서만 표시
+        },
+        {
             href: "/settings",
             name: "설정",
             icon: "⚙️",
             description: "애플리케이션 설정",
         },
     ];
+
+    // 개발 환경이 아닐 때는 devOnly 항목 제외
+    const navItems = allNavItems.filter((item) => !item.devOnly || isDev);
 
     return (
         <div className="w-64 bg-white dark:bg-gray-800 shadow-lg h-screen fixed left-0 top-0 z-10">

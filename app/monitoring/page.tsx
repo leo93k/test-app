@@ -12,15 +12,16 @@ interface QueueStatus {
     maxConcurrent: number;
 }
 
-export default function QueueDashboard() {
+export default function MonitoringPage() {
     const dispatch = useAppDispatch();
     const logs = useAppSelector((state) => state.logs.logs);
     const [queueStatus, setQueueStatus] = useState<QueueStatus>({
         queueLength: 0,
         runningCount: 0,
-        maxConcurrent: 10,
+        maxConcurrent: 5,
     });
     const [isAutoRefresh, setIsAutoRefresh] = useState(true);
+    const [refreshInterval, setRefreshInterval] = useState(1000);
 
     // 큐 상태 폴링 함수
     const pollQueueStatus = useCallback(async () => {
@@ -37,13 +38,18 @@ export default function QueueDashboard() {
         let statusInterval: NodeJS.Timeout;
 
         if (isAutoRefresh) {
-            statusInterval = setInterval(pollQueueStatus, 1000); // 1초마다 큐 상태 폴링
+            statusInterval = setInterval(pollQueueStatus, refreshInterval);
         }
 
         return () => {
             if (statusInterval) clearInterval(statusInterval);
         };
-    }, [isAutoRefresh, pollQueueStatus]);
+    }, [isAutoRefresh, pollQueueStatus, refreshInterval]);
+
+    // 초기 로드 시 상태 조회
+    useEffect(() => {
+        pollQueueStatus();
+    }, [pollQueueStatus]);
 
     // 로그 삭제 함수
     const clearAllLogs = () => {
@@ -79,7 +85,7 @@ export default function QueueDashboard() {
             <div className="mb-6">
                 <div className="flex justify-between items-center mb-4">
                     <h2 className="text-2xl font-bold text-gray-800 dark:text-white">
-                        📊 브라우저 큐 모니터링 대시보드
+                        📊 서버 큐 모니터링
                     </h2>
                     <div className="flex gap-2">
                         <button
@@ -109,7 +115,7 @@ export default function QueueDashboard() {
                     </div>
                 </div>
                 <p className="text-gray-600 dark:text-gray-300">
-                    브라우저 큐의 실시간 상태를 모니터링하고 로그를 확인할 수
+                    서버 사이드 큐의 실시간 상태를 모니터링하고 로그를 확인할 수
                     있습니다.
                 </p>
             </div>
