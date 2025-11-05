@@ -539,6 +539,43 @@ export default function FriendRequestSection({
                                 };
                             }
 
+                            // "already-requesting" 또는 "already-friend" 상태 처리
+                            if (
+                                status === "already-requesting" ||
+                                status === "already-friend"
+                            ) {
+                                setBlogStatuses((prev) => {
+                                    const newStatuses = new Map(prev);
+                                    newStatuses.set(
+                                        blog.url,
+                                        status as BlogStatus
+                                    );
+                                    return newStatuses;
+                                });
+
+                                if (status === "already-requesting") {
+                                    await logger.info(
+                                        `ℹ️ 블로그 ${
+                                            index + 1
+                                        } 이미 추가 중입니다: ${blog.title}`
+                                    );
+                                } else {
+                                    await logger.info(
+                                        `ℹ️ 블로그 ${
+                                            index + 1
+                                        } 이미 이웃 상태입니다: ${blog.title}`
+                                    );
+                                }
+
+                                return {
+                                    success: true,
+                                    blog,
+                                    index,
+                                    status: status as typeof status,
+                                };
+                            }
+
+                            // 정상 성공 처리
                             setBlogStatuses((prev) => {
                                 const newStatuses = new Map(prev);
                                 newStatuses.set(blog.url, status as BlogStatus);
@@ -722,6 +759,7 @@ export default function FriendRequestSection({
     return (
         <div className="max-w-4xl mx-auto mb-8">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                {maxConcurrent}
                 <h3 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
                     🤝 서로이웃 추가
                 </h3>
