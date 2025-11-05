@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { Server as HTTPServer } from "http";
 import { chromium } from "playwright";
-import { AutoLoginService } from "@/service/crawler/login/loginService";
+import { createLoginService } from "@/service/crawler/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
 import { loginButtonSelectors } from "@/const/selectors";
@@ -18,6 +18,7 @@ import {
     getBotDetectionBypassScript,
 } from "@/service/crawler/utils/browserUtils";
 import { findAndClick } from "@/service/crawler/utils/crawlService";
+import { navigate } from "@/service/crawler/utils/navigationUtils";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
@@ -123,14 +124,11 @@ export default async function handler(
         const page = await context.newPage();
 
         // 페이지 로드 및 대기
-        await logger.info(`페이지 로딩 시작: ${url}`);
-
-        await page.goto(url, {
-            waitUntil: "domcontentloaded",
+        await navigate(page, url, logger, {
+            contextName: "페이지",
             timeout: DEFAULT_TIMEOUT,
+            retry: false,
         });
-
-        await logger.success(`페이지 로딩 완료: ${url}`);
 
         // 원래 페이지 URL 저장 (로그인 후 돌아올 페이지)
         const originalUrl = page.url();
@@ -206,8 +204,8 @@ export default async function handler(
 
         // 로그인 시도
         await logger.info("자동 로그인 시도 중...");
-        const loginService = new AutoLoginService(page, logger);
-        const loginResult = await loginService.attemptLogin({
+        const loginService = createLoginService(page, logger);
+        const loginResult = await loginService.execute({
             username,
             password,
         });

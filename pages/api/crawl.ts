@@ -1,15 +1,16 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { Server as HTTPServer } from "http";
 import { chromium } from "playwright";
-import { AutoLoginService } from "@/service/crawler/login/loginService";
+import { createLoginService } from "@/service/crawler/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
-import { executeFriendRequestProcess } from "@/service/crawler/friendRequest/friendRequestFlow";
+import { createFriendRequestService } from "@/service/crawler/friendRequestService";
 import { DEFAULT_TIMEOUT } from "@/const";
 import {
     getChromeArgs,
     generateRandomUserAgent,
 } from "@/service/crawler/utils/browserUtils";
+import { navigate } from "@/service/crawler/utils/navigationUtils";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
@@ -97,13 +98,13 @@ export default async function handler(
         }
 
         // 페이지 로드 및 대기
-        await logger.info(`페이지 로딩 시작: ${url}`);
         try {
-            await page.goto(url, {
-                waitUntil: headless ? "networkidle" : "domcontentloaded",
+            await navigate(page, url, logger, {
+                contextName: "페이지",
                 timeout: DEFAULT_TIMEOUT,
+                retry: false,
+                waitUntil: headless ? "networkidle" : "domcontentloaded",
             });
-            await logger.success(`페이지 로딩 완료: ${url}`);
 
             // 페이지 제목을 로그에 출력
             try {
@@ -159,8 +160,8 @@ export default async function handler(
         // 로그인 정보가 제공된 경우 자동 로그인 시도 (서로이웃 추가 모드가 아닐 때만)
         if (username && password && !friendRequest) {
             await logger.info("자동 로그인 시도 중...");
-            const loginService = new AutoLoginService(page, logger);
-            const loginResult = await loginService.attemptLogin({
+            const loginService = createLoginService(page, logger);
+            const loginResult = await loginService.execute({
                 username,
                 password,
             });
@@ -185,14 +186,16 @@ export default async function handler(
         let friendRequestError: string | undefined;
 
         try {
-            friendRequestStatus = await executeFriendRequestProcess(
+            const friendRequestService = createFriendRequestService(
                 page,
-                logger,
+                logger
+            );
+            friendRequestStatus = await friendRequestService.execute({
                 username,
                 password,
                 message,
-                url
-            );
+                originalUrl: url,
+            });
         } catch (error) {
             friendRequestStatus = "failed";
             friendRequestError =

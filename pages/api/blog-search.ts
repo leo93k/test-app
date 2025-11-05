@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
 import { generateRandomUserAgent } from "@/service/crawler/utils/browserUtils";
-import { searchBlogPages } from "@/service/crawler/blogSearch/blogSearchFlow";
+import { createBlogSearchService } from "@/service/crawler/blogSearchService/blogSearchService";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
@@ -59,13 +59,12 @@ export default async function handler(
 
         try {
             // 블로그 검색 수행
-            const allResults = await searchBlogPages(
-                context,
+            const blogSearchService = createBlogSearchService(context, logger);
+            const allResults = await blogSearchService.execute({
                 keyword,
                 pageNumbers,
-                logger,
-                () => isAborted
-            );
+                isAborted: () => isAborted,
+            });
             await browser.close();
 
             // 중지되었는지 확인
