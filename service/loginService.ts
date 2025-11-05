@@ -123,12 +123,44 @@ export class AutoLoginService {
         // 필드 클릭 후 값 입력 (네이버의 경우 필요할 수 있음)
         // click()은 자동으로 요소가 클릭 가능할 때까지 대기
         await usernameField.click();
-        await usernameField.fill(username);
+        // 봇 탐지 우회를 위한 인간적인 타이핑 시뮬레이션
+        await this.typeHumanLike(usernameField, username);
+        await this.logger.success(`✅ 사용자명 입력 완료`);
+
+        // 필드 전환 전 약간의 대기
+        await this.page.waitForTimeout(200 + Math.random() * 100);
 
         await passwordField.click();
-        await passwordField.fill(password);
+        // 비밀번호도 인간적인 타이핑으로 입력
+        await this.typeHumanLike(passwordField, password);
+        await this.logger.success(`✅ 비밀번호 입력 완료`);
+
+        // 입력 완료 후 약간의 대기 (사용자가 확인하는 시간)
+        await this.page.waitForTimeout(300 + Math.random() * 200);
 
         await this.logger.success(`Login credentials filled`);
+    }
+
+    /**
+     * 인간적인 타이핑 시뮬레이션 (봇 탐지 우회)
+     * 각 문자를 랜덤한 속도로 입력하여 실제 사용자처럼 보이게 함
+     */
+    private async typeHumanLike(field: any, text: string): Promise<void> {
+        // 기존 내용 지우기
+        await field.fill("");
+
+        // 각 문자를 개별적으로 입력
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            await field.type(char, {
+                delay: 50 + Math.random() * 100, // 50-150ms 사이의 랜덤 딜레이
+            });
+
+            // 가끔씩 더 긴 딜레이 (사용자가 생각하는 것처럼)
+            if (Math.random() < 0.1 && i > 0) {
+                await this.page.waitForTimeout(200 + Math.random() * 300);
+            }
+        }
     }
 
     private async clickLoginButton(passwordField: any): Promise<LoginResult> {

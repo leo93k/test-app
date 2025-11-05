@@ -291,10 +291,83 @@ export async function navigateBackToBlog(
     const currentUrl = page.url();
     await logger.info(`현재 URL: ${currentUrl}`);
 
-    if (
-        !currentUrl.includes("blog.naver.com") ||
-        currentUrl.includes("nidlogin.login")
-    ) {
+    // 로그인 제출 후 다시 로그인 페이지로 돌아온 경우 오류 처리
+    if (currentUrl.includes("nidlogin.login")) {
+        await logger.error(
+            "❌ 로그인 제출 후 다시 로그인 페이지로 돌아왔습니다."
+        );
+
+        // 페이지 내용 확인하여 오류 원인 파악
+        try {
+            const pageContent = await page.evaluate(() => {
+                const bodyText = document.body?.textContent || "";
+                const errorText =
+                    document.querySelector(".error_message")?.textContent || "";
+                const captchaText =
+                    document.querySelector(".captcha")?.textContent || "";
+                return bodyText + " " + errorText + " " + captchaText;
+            });
+
+            await logger.info(
+                `📋 로그인 페이지 내용 확인: ${pageContent.substring(
+                    0,
+                    200
+                )}...`
+            );
+
+            let errorReason = "";
+
+            // 자동문자방지(CAPTCHA) 확인
+            if (
+                pageContent.includes("자동입력 방지") ||
+                pageContent.includes("자동입력방지") ||
+                pageContent.includes("captcha") ||
+                pageContent.includes("CAPTCHA") ||
+                pageContent.includes("보안 문자") ||
+                pageContent.includes("보안문자") ||
+                pageContent.includes("자동 등록 방지") ||
+                pageContent.includes("이미지 인증")
+            ) {
+                errorReason = "자동문자방지(CAPTCHA)가 발생했습니다.";
+                await logger.error(`❌ 로그인 실패 사유: ${errorReason}`);
+            }
+            // 비밀번호 오류 확인
+            else if (
+                pageContent.includes("비밀번호") ||
+                pageContent.includes("틀렸습니다") ||
+                pageContent.includes("일치하지 않습니다") ||
+                pageContent.includes("잘못되었습니다") ||
+                pageContent.includes("아이디 또는 비밀번호")
+            ) {
+                errorReason =
+                    "비밀번호가 틀렸거나 아이디/비밀번호가 일치하지 않습니다.";
+                await logger.error(`❌ 로그인 실패 사유: ${errorReason}`);
+            }
+            // 기타 오류
+            else {
+                errorReason = "로그인에 실패했습니다. (원인 불명)";
+                await logger.error(`❌ 로그인 실패 사유: ${errorReason}`);
+                await logger.error(
+                    `페이지 내용: ${pageContent.substring(0, 500)}...`
+                );
+            }
+
+            throw new Error(`로그인 실패: ${errorReason}`);
+        } catch (error) {
+            // 이미 에러를 throw한 경우 재throw
+            if (
+                error instanceof Error &&
+                error.message.includes("로그인 실패")
+            ) {
+                throw error;
+            }
+            // 페이지 내용 확인 실패 시에도 로그인 실패로 처리
+            await logger.error("❌ 로그인 실패: 페이지 내용 확인 중 오류 발생");
+            throw new Error("로그인 실패: 로그인 페이지로 다시 돌아왔습니다.");
+        }
+    }
+
+    if (!currentUrl.includes("blog.naver.com")) {
         await logger.info("🔄 원래 블로그 페이지로 돌아가는 중...");
 
         const blogIdMatch = originalUrl.match(/blog\.naver\.com\/([^\/]+)/);
