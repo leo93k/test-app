@@ -6,6 +6,7 @@ interface SettingsState {
     logRetentionDays: number;
     enableAutoRefresh: boolean;
     refreshInterval: number;
+    maxBlogSearchPages: number;
 }
 
 const initialState: SettingsState = {
@@ -14,6 +15,7 @@ const initialState: SettingsState = {
     logRetentionDays: 7,
     enableAutoRefresh: true,
     refreshInterval: 1000,
+    maxBlogSearchPages: 3,
 };
 
 const settingsSlice = createSlice({
@@ -35,6 +37,9 @@ const settingsSlice = createSlice({
         setRefreshInterval: (state, action: PayloadAction<number>) => {
             state.refreshInterval = action.payload;
         },
+        setMaxBlogSearchPages: (state, action: PayloadAction<number>) => {
+            state.maxBlogSearchPages = action.payload;
+        },
         resetSettings: () => initialState,
         loadSettings: (
             state,
@@ -51,6 +56,7 @@ export const {
     setLogRetentionDays,
     setEnableAutoRefresh,
     setRefreshInterval,
+    setMaxBlogSearchPages,
     resetSettings,
     loadSettings,
 } = settingsSlice.actions;

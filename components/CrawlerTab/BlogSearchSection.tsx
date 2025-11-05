@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { useAppSelector } from "@/lib/hooks";
 import type { BlogSearchResult } from "./types";
 
 interface BlogSearchSectionProps {
@@ -21,6 +22,9 @@ export default function BlogSearchSection({
 }: BlogSearchSectionProps) {
     const [keyword, setKeyword] = useState("");
     const [maxPage, setMaxPage] = useState(1);
+    const maxBlogSearchPages = useAppSelector(
+        (state) => state.settings.maxBlogSearchPages
+    );
 
     const handleSearch = () => {
         onSearch(keyword, maxPage);
@@ -59,11 +63,14 @@ export default function BlogSearchSection({
                                 onChange={(e) => {
                                     const value = parseInt(e.target.value) || 1;
                                     setMaxPage(
-                                        Math.max(1, Math.min(20, value))
+                                        Math.max(
+                                            1,
+                                            Math.min(maxBlogSearchPages, value)
+                                        )
                                     );
                                 }}
                                 min="1"
-                                max="20"
+                                max={maxBlogSearchPages}
                                 className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
                                 disabled={searchLoading}
                             />
@@ -85,8 +92,9 @@ export default function BlogSearchSection({
                         )}
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        1부터 입력한 숫자까지의 페이지를 검색합니다. (예: 3 입력
-                        시 1, 2, 3페이지 검색)
+                        1부터 입력한 숫자까지의 페이지를 검색합니다. 최대 <br />
+                        {maxBlogSearchPages}까지 설정 가능합니다. <br />
+                        (예: 3 입력 시 1, 2, 3 페이지 검색)
                     </p>
                 </div>
 

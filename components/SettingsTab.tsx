@@ -10,6 +10,7 @@ import {
     setLogRetentionDays,
     setEnableAutoRefresh,
     setRefreshInterval,
+    setMaxBlogSearchPages,
     resetSettings,
     loadSettings,
 } from "@/lib/store/settingsSlice";
@@ -25,6 +26,7 @@ function SettingsContent() {
         logRetentionDays,
         enableAutoRefresh,
         refreshInterval,
+        maxBlogSearchPages,
     } = useAppSelector((state) => state.settings);
 
     const [isLoading, setIsLoading] = useState(false);
@@ -46,6 +48,7 @@ function SettingsContent() {
                                 ? settings.enableAutoRefresh
                                 : true,
                         refreshInterval: settings.refreshInterval || 1000,
+                        maxBlogSearchPages: settings.maxBlogSearchPages || 3,
                     })
                 );
             }
@@ -68,6 +71,7 @@ function SettingsContent() {
                 logRetentionDays,
                 enableAutoRefresh,
                 refreshInterval,
+                maxBlogSearchPages,
             };
             localStorage.setItem("app-settings", JSON.stringify(settings));
             setMessage("설정이 저장되었습니다!");
@@ -150,6 +154,42 @@ function SettingsContent() {
                             />
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                                 브라우저가 열린 후 자동으로 닫히기까지의 시간
+                            </p>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+
+            {/* 블로그 검색 설정 */}
+            <Card className="mb-6">
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        🔍 블로그 검색 설정
+                        <Badge variant="outline">검색</Badge>
+                    </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                블로그 검색 최대 페이지 수
+                            </label>
+                            <input
+                                type="number"
+                                value={maxBlogSearchPages}
+                                onChange={(e) =>
+                                    dispatch(
+                                        setMaxBlogSearchPages(
+                                            parseInt(e.target.value) || 1
+                                        )
+                                    )
+                                }
+                                min="1"
+                                max="10"
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                            />
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                블로그 검색 시 최대 검색할 페이지 수 (1-10)
                             </p>
                         </div>
                     </div>
