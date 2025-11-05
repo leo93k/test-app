@@ -5,12 +5,14 @@ import { createLoginService } from "@/service/crawler/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
 import { createFriendRequestService } from "@/service/crawler/friendRequestService";
-import { DEFAULT_TIMEOUT } from "@/const";
+import { validateUrl, sendValidationError } from "@/lib/utils/validation";
+import { createCrawlService } from "@/service/crawler/utils/crawlService";
+import { DEFAULT_TIMEOUT, LOGIN_URL } from "@/const";
 import {
     getChromeArgs,
     generateRandomUserAgent,
+    getBotDetectionBypassScript,
 } from "@/service/crawler/utils/browserUtils";
-import { navigate } from "@/service/crawler/utils/navigationUtils";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
@@ -48,15 +50,10 @@ export default async function handler(
             message = "",
         } = req.body;
 
-        if (!url) {
-            return res.status(400).json({ error: "URL is required" });
-        }
-
         // URL 유효성 검사
-        try {
-            new URL(url);
-        } catch {
-            return res.status(400).json({ error: "Invalid URL format" });
+        const urlError = validateUrl(url);
+        if (urlError) {
+            return sendValidationError(res, urlError);
         }
 
         await logger.info(`크롤링 시작: ${url}`);
@@ -79,42 +76,91 @@ export default async function handler(
             `브라우저 실행 완료 (${headless ? "백그라운드" : "화면 표시"} 모드)`
         );
 
-        const page = await browser.newPage();
-
-        // 타임아웃 설정
-        page.setDefaultTimeout(DEFAULT_TIMEOUT);
-        page.setDefaultNavigationTimeout(DEFAULT_TIMEOUT);
-
-        // User-Agent 설정 (랜덤 생성)
+        // 컨텍스트 생성 (세션 공유를 위해)
         const randomUserAgent = generateRandomUserAgent();
         await logger.info(`🔀 생성된 User-Agent: ${randomUserAgent}`);
-        await page.setExtraHTTPHeaders({
-            "User-Agent": randomUserAgent,
+
+        const context = await browser.newContext({
+            userAgent: randomUserAgent,
+            viewport: { width: 1920, height: 1080 },
+            locale: "ko-KR",
+            timezoneId: "Asia/Seoul",
+            permissions: ["geolocation"],
+            extraHTTPHeaders: {
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                Connection: "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Cache-Control": "max-age=0",
+            },
         });
 
-        // headless 모드에서는 뷰포트 크기 설정
-        if (headless) {
-            await page.setViewportSize({ width: 1920, height: 1080 });
+        // 컨텍스트 타임아웃 설정
+        context.setDefaultTimeout(DEFAULT_TIMEOUT);
+        context.setDefaultNavigationTimeout(DEFAULT_TIMEOUT);
+
+        // WebDriver 탐지 우회를 위한 JavaScript 추가
+        await context.addInitScript(getBotDetectionBypassScript());
+
+        // 로그인 정보가 제공된 경우 먼저 로그인 수행 (서로이웃 추가 모드가 아닐 때만)
+        if (username && password && !friendRequest) {
+            await logger.info("🔐 로그인 수행 중...");
+
+            // 로그인 페이지 생성
+            const loginPage = await context.newPage();
+            const crawlService = createCrawlService(logger);
+
+            try {
+                // 로그인 페이지로 이동
+                await crawlService.navigateToPage(loginPage, LOGIN_URL, {
+                    headless,
+                    timeout: DEFAULT_TIMEOUT,
+                    retry: false,
+                });
+
+                // 로그인 수행
+                const loginService = createLoginService(loginPage, logger);
+                const loginResult = await loginService.execute({
+                    username,
+                    password,
+                });
+
+                if (!loginResult.success) {
+                    await logger.error(`로그인 실패: ${loginResult.message}`);
+                    await loginPage.close();
+                    await browser.close();
+                    return res.status(400).json({
+                        success: false,
+                        error: loginResult.message,
+                    });
+                }
+
+                await logger.success("✅ 로그인 완료");
+                await loginPage.close(); // 로그인 페이지는 닫기
+            } catch (error) {
+                await loginPage.close();
+                await browser.close();
+                throw error;
+            }
         }
+
+        // 작업 페이지 생성 (로그인된 컨텍스트 사용)
+        const page = await context.newPage();
 
         // 페이지 로드 및 대기
         try {
-            await navigate(page, url, logger, {
-                contextName: "페이지",
+            const crawlService = createCrawlService(logger);
+            await crawlService.navigateToPage(page, url, {
+                headless,
                 timeout: DEFAULT_TIMEOUT,
                 retry: false,
                 waitUntil: headless ? "networkidle" : "domcontentloaded",
             });
-
-            // 페이지 제목을 로그에 출력
-            try {
-                const title = await page.title();
-                await logger.success(`페이지 로드 완료: ${title}`);
-            } catch (titleError) {
-                await logger.info(
-                    `페이지 제목을 가져올 수 없습니다: ${titleError}`
-                );
-            }
         } catch (gotoError) {
             // 타임아웃 또는 네비게이션 에러 처리
             const errorMessage =
@@ -157,16 +203,7 @@ export default async function handler(
             });
         }
 
-        // 로그인 정보가 제공된 경우 자동 로그인 시도 (서로이웃 추가 모드가 아닐 때만)
-        if (username && password && !friendRequest) {
-            await logger.info("자동 로그인 시도 중...");
-            const loginService = createLoginService(page, logger);
-            const loginResult = await loginService.execute({
-                username,
-                password,
-            });
-            await logger.info(`로그인 결과: ${loginResult.message}`);
-        }
+        // 이미 컨텍스트에서 로그인을 수행했으므로, 여기서는 작업만 수행
 
         if (!friendRequest) {
             return res.status(200).json({
