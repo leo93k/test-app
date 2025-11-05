@@ -8,7 +8,8 @@ import {
     loginButtonSelectors,
     loginErrorSelectors,
 } from "@/const/selectors";
-import { Logger } from "./logger";
+import { Logger } from "../../logger";
+import { findElement } from "../utils/crawlService";
 
 export interface LoginCredentials {
     username: string;
@@ -78,40 +79,17 @@ export class AutoLoginService {
     }
 
     private async findUsernameField() {
-        for (const selector of idSelectors) {
-            try {
-                await this.logger.info(`Finding username field: ${selector}`);
-                const field = await this.page.$(selector);
-                if (field) {
-                    await this.logger.success(
-                        `Found username field: ${selector}`
-                    );
-                    return field;
-                }
-            } catch {
-                continue;
-            }
-        }
-
-        return null;
+        return await findElement(this.page, idSelectors, this.logger, {
+            contextName: "아이디 입력 필드",
+            useWaitForSelector: false,
+        });
     }
 
     private async findPasswordField() {
-        for (const selector of passwordSelectors) {
-            try {
-                const field = await this.page.$(selector);
-                if (field) {
-                    await this.logger.success(
-                        `Found password field: ${selector}`
-                    );
-                    return field;
-                }
-            } catch {
-                continue;
-            }
-        }
-
-        return null;
+        return await findElement(this.page, passwordSelectors, this.logger, {
+            contextName: "비밀번호 입력 필드",
+            useWaitForSelector: false,
+        });
     }
 
     private async fillLoginFields(
@@ -193,29 +171,10 @@ export class AutoLoginService {
             ...loginButtonSelectors,
         ];
 
-        for (const selector of selectorsToTry) {
-            try {
-                await this.logger.info(`🔍 로그인 버튼 찾기 시도: ${selector}`);
-                const loginButton = await this.page.$(selector);
-                if (loginButton) {
-                    await this.logger.success(
-                        `✅ 로그인 버튼 발견: ${selector}`
-                    );
-                    return loginButton;
-                } else {
-                    await this.logger.info(
-                        `❌ 셀렉터 "${selector}"로 버튼을 찾을 수 없음`
-                    );
-                }
-            } catch (e) {
-                await this.logger.error(
-                    `❌ 셀렉터 "${selector}" 시도 중 오류: ${e}`
-                );
-                continue;
-            }
-        }
-
-        return null;
+        return await findElement(this.page, selectorsToTry, this.logger, {
+            contextName: "로그인 버튼",
+            useWaitForSelector: false,
+        });
     }
 
     private async logPageState(context: string) {

@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { Server as HTTPServer } from "http";
 import { chromium } from "playwright";
-import { AutoLoginService } from "@/service/loginService";
+import { AutoLoginService } from "@/service/crawler/login/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
 import { loginButtonSelectors } from "@/const/selectors";
@@ -10,8 +10,14 @@ import {
     PAGE_LOAD_TIMEOUT,
     ACTION_DELAY,
     PAGE_NAVIGATION_DELAY,
-    generateRandomUserAgent,
+    SELECTOR_WAIT_TIMEOUT,
 } from "@/const";
+import {
+    generateRandomUserAgent,
+    getChromeArgs,
+    getBotDetectionBypassScript,
+} from "@/service/crawler/utils/browserUtils";
+import { findAndClick } from "@/service/crawler/utils/crawlService";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
@@ -19,42 +25,7 @@ type NextApiResponseWithSocket = NextApiResponse & {
     };
 };
 
-/**
- * 로그인 버튼을 찾아서 클릭하는 공통 함수
- * @param target - Page 또는 Frame (메인 페이지 또는 iframe)
- * @param selectors - 로그인 버튼 셀렉터 배열
- * @param logger - Logger 인스턴스
- * @param contextName - 로그에 표시할 컨텍스트 이름 (예: "메인 페이지", "iframe 1")
- * @returns 버튼 클릭 성공 여부
- */
-async function findAndClickLoginButton(
-    target: {
-        $(selector: string): Promise<{ click(): Promise<void> } | null>;
-    },
-    selectors: string[],
-    logger: Logger,
-    contextName: string
-): Promise<boolean> {
-    for (const selector of selectors) {
-        try {
-            const loginButton = await target.$(selector);
-            if (loginButton) {
-                await loginButton.click();
-                await logger.success(
-                    `✅ ${contextName}에서 로그인 버튼 클릭 완료 (선택자: ${selector})`
-                );
-                return true;
-            }
-        } catch (error) {
-            await logger.error(
-                `❌ ${contextName}에서 오류 발생 (${selector}): ${error}`
-            );
-            continue;
-        }
-    }
-    await logger.info(`⚠️ ${contextName}에서 모든 셀렉터 시도 실패`);
-    return false;
-}
+// findAndClickLoginButton 함수는 crawlService의 findAndClick을 사용하도록 변경됨
 
 export default async function handler(
     req: NextApiRequest,
@@ -105,35 +76,8 @@ export default async function handler(
             } 모드)`
         );
 
-        // AWS 환경에서 봇 탐지 우회를 위한 추가 Chrome 인자
-        const chromeArgs = [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled", // WebDriver 탐지 우회
-            "--disable-dev-shm-usage",
-            "--disable-accelerated-2d-canvas",
-            "--no-first-run",
-            "--no-zygote",
-            "--disable-gpu",
-            "--disable-web-security",
-            "--disable-features=IsolateOrigins,site-per-process",
-            "--disable-site-isolation-trials",
-            "--disable-extensions",
-            "--disable-plugins",
-            "--disable-javascript-harmony-shipping",
-            "--disable-background-timer-throttling",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--disable-background-networking",
-            "--force-color-profile=srgb",
-            "--metrics-recording-only",
-            "--mute-audio",
-            "--no-default-browser-check",
-            "--enable-automation=false", // 자동화 모드 비활성화
-            "--password-store=basic",
-            "--use-mock-keychain",
-            ...(headless ? [] : ["--start-maximized"]),
-        ];
+        // AWS 환경에서 봇 탐지 우회를 위한 Chrome 인자
+        const chromeArgs = getChromeArgs(headless);
 
         browser = await chromium.launch({
             headless: headless,
@@ -173,39 +117,7 @@ export default async function handler(
         context.setDefaultNavigationTimeout(PAGE_LOAD_TIMEOUT);
 
         // WebDriver 탐지 우회를 위한 JavaScript 추가
-        await context.addInitScript(() => {
-            // navigator.webdriver 제거
-            Object.defineProperty(navigator, "webdriver", {
-                get: () => false,
-            });
-
-            // Chrome 객체 추가
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (window as any).chrome = {
-                runtime: {},
-            };
-
-            // permissions API 모킹
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const originalQuery = (window.navigator as any).permissions.query;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (window.navigator as any).permissions.query = (parameters: {
-                name: string;
-            }) =>
-                parameters.name === "notifications"
-                    ? Promise.resolve({ state: Notification.permission })
-                    : originalQuery(parameters);
-
-            // plugins 배열 추가
-            Object.defineProperty(navigator, "plugins", {
-                get: () => [1, 2, 3, 4, 5],
-            });
-
-            // languages 배열 설정
-            Object.defineProperty(navigator, "languages", {
-                get: () => ["ko-KR", "ko", "en-US", "en"],
-            });
-        });
+        await context.addInitScript(getBotDetectionBypassScript());
 
         // 새 탭 열기
         const page = await context.newPage();
@@ -241,11 +153,14 @@ export default async function handler(
             for (let index = 0; index < frames.length; index++) {
                 const frame = frames[index];
                 await logger.info(`🔍 iframe ${index + 1}에서 검색 중...`);
-                loginButtonClicked = await findAndClickLoginButton(
+                loginButtonClicked = await findAndClick(
                     frame,
                     loginButtonSelectors,
                     logger,
-                    `iframe ${index + 1}`
+                    {
+                        contextName: `iframe ${index + 1}의 로그인 버튼`,
+                        useWaitForSelector: false,
+                    }
                 );
 
                 // 버튼을 찾았으면 루프 종료
@@ -256,11 +171,14 @@ export default async function handler(
 
             // iframe에서 못 찾으면 메인 페이지에서 찾기
             if (!loginButtonClicked) {
-                loginButtonClicked = await findAndClickLoginButton(
+                loginButtonClicked = await findAndClick(
                     page,
                     loginButtonSelectors,
                     logger,
-                    "메인 페이지"
+                    {
+                        contextName: "메인 페이지의 로그인 버튼",
+                        useWaitForSelector: false,
+                    }
                 );
             }
         } catch (iframeError) {
@@ -277,7 +195,9 @@ export default async function handler(
 
         // 로그인 페이지가 로드되었는지 확인 (input#id 필드가 나타날 때까지 대기)
         try {
-            await page.waitForSelector("input#id", { timeout: 5000 });
+            await page.waitForSelector("input#id", {
+                timeout: SELECTOR_WAIT_TIMEOUT,
+            });
             await logger.success("✅ 로그인 페이지 로드 완료");
         } catch (error) {
             await logger.error(`⚠️ 로그인 페이지 로드 확인 실패: ${error}`);

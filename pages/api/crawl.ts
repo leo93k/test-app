@@ -1,11 +1,15 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { Server as HTTPServer } from "http";
 import { chromium } from "playwright";
-import { AutoLoginService } from "@/service/loginService";
+import { AutoLoginService } from "@/service/crawler/login/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
-import { executeFriendRequestProcess } from "@/service/crawler/friendRequestFlow";
+import { executeFriendRequestProcess } from "@/service/crawler/friendRequest/friendRequestFlow";
 import { DEFAULT_TIMEOUT } from "@/const";
+import {
+    getChromeArgs,
+    generateRandomUserAgent,
+} from "@/service/crawler/utils/browserUtils";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
@@ -62,14 +66,13 @@ export default async function handler(
                 headless ? "백그라운드" : "화면 표시"
             } 모드)`
         );
+        // 봇 탐지 우회를 위한 Chrome 인자
+        const chromeArgs = getChromeArgs(headless);
+
         browser = await chromium.launch({
             headless: headless, // 백그라운드 실행 여부
             slowMo: headless ? 0 : 1000, // 백그라운드 모드에서는 대기 시간 없음
-            args: [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                ...(headless ? [] : ["--start-maximized"]), // 백그라운드 모드가 아닐 때만 최대화
-            ],
+            args: chromeArgs,
         });
         await logger.success(
             `브라우저 실행 완료 (${headless ? "백그라운드" : "화면 표시"} 모드)`
@@ -82,7 +85,6 @@ export default async function handler(
         page.setDefaultNavigationTimeout(DEFAULT_TIMEOUT);
 
         // User-Agent 설정 (랜덤 생성)
-        const { generateRandomUserAgent } = await import("@/const");
         const randomUserAgent = generateRandomUserAgent();
         await logger.info(`🔀 생성된 User-Agent: ${randomUserAgent}`);
         await page.setExtraHTTPHeaders({

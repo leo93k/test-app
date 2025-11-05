@@ -7,8 +7,8 @@ import {
     messageSelectors,
     finalNextButtonSelectors,
 } from "@/const/selectors";
-
-const ACTION_DELAY = 300;
+import { SELECTOR_WAIT_TIMEOUT, ACTION_DELAY } from "@/const";
+import { findElement, findAndClick, findAndFill } from "../utils/crawlService";
 
 /**
  * 서로이웃 추가 버튼 찾기 및 클릭
@@ -129,7 +129,9 @@ export async function clickRadioButton(
     for (const selector of radioSelectors) {
         try {
             await logger.info(`🔍 라디오 버튼 찾기 시도: ${selector}`);
-            await popupPage.waitForSelector(selector, { timeout: 3000 });
+            await popupPage.waitForSelector(selector, {
+                timeout: SELECTOR_WAIT_TIMEOUT,
+            });
             await logger.info(`🔘 라디오 버튼 발견: ${selector}`);
 
             // 비활성화 확인
@@ -162,7 +164,9 @@ export async function clickRadioButton(
             const frame = frames[i];
             for (const selector of radioSelectors) {
                 try {
-                    await frame.waitForSelector(selector, { timeout: 3000 });
+                    await frame.waitForSelector(selector, {
+                        timeout: SELECTOR_WAIT_TIMEOUT,
+                    });
                     await logger.info(
                         `🔘 iframe ${i + 1}에서 라디오 버튼 발견: ${selector}`
                     );
@@ -212,44 +216,20 @@ export async function clickNextButton(
     let clicked = false;
 
     // 메인 페이지에서 찾기
-    for (const selector of nextButtonSelectors) {
-        try {
-            const nextButton = await popupPage.$(selector);
-            if (nextButton) {
-                await nextButton.click();
-                await logger.success(
-                    `✅ ${buttonName} 버튼 클릭 완료 (선택자: ${selector})`
-                );
-                clicked = true;
-                break;
-            }
-        } catch {
-            continue;
-        }
-    }
+    clicked = await findAndClick(popupPage, nextButtonSelectors, logger, {
+        contextName: `${buttonName} 버튼`,
+        useWaitForSelector: false,
+    });
 
     // iframe에서 찾기
     if (!clicked) {
         const frames = popupPage.frames();
         for (let i = 0; i < frames.length; i++) {
             const frame = frames[i];
-            for (const selector of nextButtonSelectors) {
-                try {
-                    const nextButton = await frame.$(selector);
-                    if (nextButton) {
-                        await nextButton.click();
-                        await logger.success(
-                            `✅ iframe 내 ${buttonName} 버튼 클릭 완료 (iframe ${
-                                i + 1
-                            }, 선택자: ${selector})`
-                        );
-                        clicked = true;
-                        break;
-                    }
-                } catch {
-                    continue;
-                }
-            }
+            clicked = await findAndClick(frame, nextButtonSelectors, logger, {
+                contextName: `iframe ${i + 1}의 ${buttonName} 버튼`,
+                useWaitForSelector: false,
+            });
             if (clicked) break;
         }
     }
@@ -274,47 +254,34 @@ export async function fillMessage(
     let messageInputted = false;
 
     // 메인 페이지에서 찾기
-    for (const selector of messageSelectors) {
-        try {
-            await logger.info(`🔍 메시지 입력 필드 찾기 시도: ${selector}`);
-            await popupPage.waitForSelector(selector, { timeout: 3000 });
-            await logger.info(`🔘 메시지 입력 필드 발견: ${selector}`);
-            await popupPage.fill(selector, message);
-            await logger.success(
-                `✅ 서로이웃 메시지 입력 완료 (선택자: ${selector})`
-            );
-            messageInputted = true;
-            break;
-        } catch {
-            continue;
+    messageInputted = await findAndFill(
+        popupPage,
+        messageSelectors,
+        message,
+        logger,
+        {
+            contextName: "메시지 입력 필드",
+            useWaitForSelector: true,
+            waitTimeout: SELECTOR_WAIT_TIMEOUT,
         }
-    }
+    );
 
     // iframe에서 찾기
     if (!messageInputted) {
         const frames = popupPage.frames();
         for (let i = 0; i < frames.length; i++) {
             const frame = frames[i];
-            for (const selector of messageSelectors) {
-                try {
-                    await frame.waitForSelector(selector, { timeout: 3000 });
-                    await logger.info(
-                        `🔘 iframe ${
-                            i + 1
-                        }에서 메시지 입력 필드 발견: ${selector}`
-                    );
-                    await frame.fill(selector, message);
-                    await logger.success(
-                        `✅ iframe 내 메시지 입력 완료 (iframe ${
-                            i + 1
-                        }, 선택자: ${selector})`
-                    );
-                    messageInputted = true;
-                    break;
-                } catch {
-                    continue;
+            messageInputted = await findAndFill(
+                frame,
+                messageSelectors,
+                message,
+                logger,
+                {
+                    contextName: `iframe ${i + 1}의 메시지 입력 필드`,
+                    useWaitForSelector: true,
+                    waitTimeout: SELECTOR_WAIT_TIMEOUT,
                 }
-            }
+            );
             if (messageInputted) break;
         }
     }
@@ -540,53 +507,44 @@ export async function clickFinalNextButton(
     let finalNextClicked = false;
 
     // 메인 페이지에서 찾기
-    for (const selector of finalNextButtonSelectors) {
-        try {
-            await logger.info(`🔍 최종 다음 버튼 찾기 시도: ${selector}`);
-            await popupPage.waitForSelector(selector, { timeout: 3000 });
-            await logger.info(`🔘 최종 다음 버튼 발견: ${selector}`);
-            await popupPage.click(selector, { force: true });
-            await logger.success(
-                `✅ 최종 다음 버튼 클릭 완료! 서로이웃 추가 프로세스 종료 (선택자: ${selector})`
-            );
-            finalNextClicked = true;
-            break;
-        } catch {
-            continue;
-        }
-    }
+    finalNextClicked = await findAndClick(
+        popupPage,
+        finalNextButtonSelectors,
+        logger,
+        {
+            contextName: "최종 다음 버튼",
+            useWaitForSelector: true,
+            waitTimeout: SELECTOR_WAIT_TIMEOUT,
+        },
+        { force: true }
+    );
 
     // iframe에서 찾기
     if (!finalNextClicked) {
         const frames = popupPage.frames();
         for (let i = 0; i < frames.length; i++) {
             const frame = frames[i];
-            for (const selector of finalNextButtonSelectors) {
-                try {
-                    await frame.waitForSelector(selector, { timeout: 3000 });
-                    await logger.info(
-                        `🔘 iframe ${
-                            i + 1
-                        }에서 최종 다음 버튼 발견: ${selector}`
-                    );
-                    await frame.click(selector, { force: true });
-                    await logger.success(
-                        `✅ iframe 내 최종 다음 버튼 클릭 완료! 서로이웃 추가 프로세스 종료 (iframe ${
-                            i + 1
-                        }, 선택자: ${selector})`
-                    );
-                    finalNextClicked = true;
-                    break;
-                } catch {
-                    continue;
-                }
-            }
+            finalNextClicked = await findAndClick(
+                frame,
+                finalNextButtonSelectors,
+                logger,
+                {
+                    contextName: `iframe ${i + 1}의 최종 다음 버튼`,
+                    useWaitForSelector: true,
+                    waitTimeout: SELECTOR_WAIT_TIMEOUT,
+                },
+                { force: true }
+            );
             if (finalNextClicked) break;
         }
     }
 
     if (!finalNextClicked) {
         await logger.error("⚠️ 최종 다음 버튼을 찾을 수 없습니다.");
+    } else {
+        await logger.success(
+            "✅ 최종 다음 버튼 클릭 완료! 서로이웃 추가 프로세스 종료"
+        );
     }
 
     return finalNextClicked;
@@ -606,7 +564,7 @@ export async function executeFriendRequestProcess(
     await logger.info("🤝 서로이웃 추가 프로세스를 시작합니다...");
 
     // 로그인 플로우 import 및 실행
-    const loginFlow = await import("./loginFlow");
+    const loginFlow = await import("../login/loginFlow");
     const loginButtonClicked = await loginFlow.clickLoginButton(page, logger);
 
     if (!loginButtonClicked) {
