@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef } from "react";
-import { ID, PASSWORD } from "@/const";
+
 import type { BlogSearchResult } from "./types";
 import type { TabType } from "./Tabs";
 import BlogSearchSection from "./BlogSearchSection";
@@ -12,8 +12,8 @@ import LogList from "./LogList";
 
 export default function CrawlerTab() {
     const [activeTab, setActiveTab] = useState<TabType>("main");
-    const [username, setUsername] = useState(ID);
-    const [password, setPassword] = useState(PASSWORD);
+    const [username, setUsername] = useState("");
+    const [password, setPassword] = useState("");
     const [searchResults, setSearchResults] = useState<BlogSearchResult[]>([]);
     const [friendRequestTargets, setFriendRequestTargets] = useState<
         BlogSearchResult[]
