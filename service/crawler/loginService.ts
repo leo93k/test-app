@@ -1,15 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Page } from "playwright";
-import { ACTION_DELAY, PAGE_NAVIGATION_DELAY, DEFAULT_TIMEOUT } from "@/const";
 import {
+    ACTION_DELAY,
+    PAGE_NAVIGATION_DELAY,
+    DEFAULT_TIMEOUT,
     idSelectors,
     passwordSelectors,
     loginSubmitSelectors,
     loginButtonSelectors,
     loginErrorSelectors,
-} from "@/const/selectors";
-import { Logger } from "../../logger";
-import { findElement } from "../utils/crawlService";
+} from "@/const";
+import { Logger } from "@/service/logger";
+import { findElement } from "./utils/crawlService";
 
 export interface LoginCredentials {
     username: string;
@@ -22,7 +24,7 @@ export interface LoginResult {
     currentUrl?: string;
 }
 
-export class AutoLoginService {
+class LoginService {
     private page: Page;
     private logger: Logger;
 
@@ -31,7 +33,7 @@ export class AutoLoginService {
         this.logger = logger;
     }
 
-    async attemptLogin(credentials: LoginCredentials): Promise<LoginResult> {
+    async execute(credentials: LoginCredentials): Promise<LoginResult> {
         const { username, password } = credentials;
 
         if (!username || !password) {
@@ -453,4 +455,12 @@ export class AutoLoginService {
             currentUrl: urlAfterEnter,
         };
     }
+}
+
+/**
+ * 로그인 서비스 인스턴스 생성
+ */
+
+export function createLoginService(page: Page, logger: Logger): LoginService {
+    return new LoginService(page, logger);
 }

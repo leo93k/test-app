@@ -1,22 +1,22 @@
 import { Page } from "playwright";
 import { Logger } from "@/service/logger";
 import {
+    NAVER_BLOG_SEARCH_URL,
+    PAGE_LOAD_TIMEOUT,
+    PAGE_NAVIGATION_DELAY,
+} from "@/const";
+import {
     blogItemContainerSelectors,
     blogTitleSelectors,
     blogDescriptionSelectors,
     blogAuthorSelectors,
 } from "@/const/selectors";
-import {
-    NAVER_BLOG_SEARCH_URL,
-    PAGE_LOAD_TIMEOUT,
-    PAGE_NAVIGATION_DELAY,
-} from "@/const";
 import type {
     BlogSearchResult,
     BlogSearchEvaluateResult,
     BlogSearchDebugInfo,
-} from "./types";
-import { parseStructuredBlogItems } from "./parser";
+} from "../blogSearchService/blogSearchServiceType";
+import { navigateWithRetry } from "../utils/navigationUtils";
 
 /**
  * 블로그 검색 URL 생성
@@ -41,109 +41,11 @@ export async function navigateToBlogSearchPage(
     pageNo: number,
     logger: Logger
 ): Promise<void> {
-    try {
-        await logger.info(`페이지 이동! ${url}`);
-        await page.goto(url, {
-            timeout: PAGE_LOAD_TIMEOUT,
-        });
-    } catch (e) {
-        await logger.error(`페이지 ${pageNo} 로드 실패: ${e}`);
-        // networkidle 타임아웃 시 load 상태로 재시도
-        await logger.info(
-            `네트워크 유휴 상태 대기 실패, load 상태로 재시도 중... (페이지 ${pageNo})`
-        );
-        try {
-            await page.goto(url, {
-                waitUntil: "load",
-                timeout: PAGE_LOAD_TIMEOUT,
-            });
-            await logger.info(`페이지 ${pageNo} 로드 완료 (load 상태)`);
-        } catch {
-            // load도 실패하면 domcontentloaded로 재시도
-            await logger.info(
-                `load 상태 대기 실패, domcontentloaded로 재시도 중... (페이지 ${pageNo})`
-            );
-            await page.goto(url, {
-                waitUntil: "domcontentloaded",
-                timeout: PAGE_LOAD_TIMEOUT,
-            });
-            await logger.info(
-                `페이지 ${pageNo} 로드 완료 (domcontentloaded 상태)`
-            );
-        }
-    }
-}
-
-/**
- * 블로그 검색 결과 파싱 함수 (브라우저 컨텍스트에서 실행할 문자열)
- */
-export function getBlogSearchEvaluateFunctionCode(): string {
-    return `
-        function parseStructuredBlogItems(blogItems, selectors) {
-            const searchResults = [];
-
-            blogItems.forEach((item, index) => {
-                if (index >= 10) return; // 페이지당 최대 10개
-
-                const titleSelectors = selectors.title;
-                const descSelectors = selectors.description;
-                const authorSelectors = selectors.author;
-
-                let titleElement = null;
-                let descriptionElement = null;
-                let authorElement = null;
-                let blogUrlElement = null;
-
-                // 제목 찾기
-                for (const selector of titleSelectors) {
-                    const el = item.querySelector(selector);
-                    if (el && el.textContent?.trim()) {
-                        titleElement = el;
-                        break;
-                    }
-                }
-
-                // URL 찾기
-                blogUrlElement = item.querySelector('a[href*="blog.naver.com"]') || titleElement;
-
-                // 설명 찾기
-                for (const selector of descSelectors) {
-                    const el = item.querySelector(selector);
-                    if (el && el.textContent?.trim()) {
-                        descriptionElement = el;
-                        break;
-                    }
-                }
-
-                // 작성자 찾기
-                for (const selector of authorSelectors) {
-                    const el = item.querySelector(selector);
-                    if (el && el.textContent?.trim()) {
-                        authorElement = el;
-                        break;
-                    }
-                }
-
-                if (titleElement && blogUrlElement) {
-                    const title = titleElement.textContent?.trim() || "";
-                    const url = blogUrlElement.getAttribute("href") || "";
-                    const description = descriptionElement?.textContent?.trim() || "";
-                    const author = authorElement?.textContent?.trim() || "";
-
-                    searchResults.push({
-                        title,
-                        url: url.startsWith("http") ? url : "https://blog.naver.com" + url,
-                        description,
-                        author,
-                        date: "",
-                        platform: "네이버 블로그",
-                    });
-                }
-            });
-
-            return searchResults;
-        }
-    `;
+    await navigateWithRetry(page, url, logger, {
+        contextName: `페이지 ${pageNo}`,
+        timeout: PAGE_LOAD_TIMEOUT,
+        retry: true,
+    });
 }
 
 /**
@@ -165,9 +67,6 @@ export async function extractBlogSearchResults(
     await logger.info(`페이지 ${pageNo} 검색 결과 렌더링 대기 중...`);
     await page.waitForTimeout(PAGE_NAVIGATION_DELAY);
 
-    // 함수를 문자열로 변환하여 브라우저 컨텍스트에 전달
-    const parseFunctionsCode = getBlogSearchEvaluateFunctionCode();
-
     const evaluateResult = await page.evaluate(
         (args: {
             selectors: {
@@ -176,11 +75,7 @@ export async function extractBlogSearchResults(
                 description: string[];
                 author: string[];
             };
-            functionsCode: string;
         }): BlogSearchEvaluateResult => {
-            // 함수 코드를 실행하여 함수들을 정의
-            eval(args.functionsCode);
-
             // 디버깅 정보 수집
             const debugInfo = {
                 containerSelectors: [] as {
@@ -224,15 +119,75 @@ export async function extractBlogSearchResults(
                 };
             }
 
-            // 정상 방법: 구조화된 블로그 아이템 파싱
-            const results = parseStructuredBlogItems(blogItems, {
-                title: args.selectors.title,
-                description: args.selectors.description,
-                author: args.selectors.author,
+            // 파싱 로직 (인라인으로 작성하여 eval 제거)
+            const searchResults: BlogSearchResult[] = [];
+
+            blogItems.forEach((item, index) => {
+                if (index >= 10) return; // 페이지당 최대 10개
+
+                const titleSelectors = args.selectors.title;
+                const descSelectors = args.selectors.description;
+                const authorSelectors = args.selectors.author;
+
+                let titleElement: Element | null = null;
+                let descriptionElement: Element | null = null;
+                let authorElement: Element | null = null;
+                let blogUrlElement: Element | null = null;
+
+                // 제목 찾기
+                for (const selector of titleSelectors) {
+                    const el = item.querySelector(selector);
+                    if (el && el.textContent?.trim()) {
+                        titleElement = el;
+                        break;
+                    }
+                }
+
+                // URL 찾기
+                blogUrlElement =
+                    item.querySelector('a[href*="blog.naver.com"]') ||
+                    titleElement;
+
+                // 설명 찾기
+                for (const selector of descSelectors) {
+                    const el = item.querySelector(selector);
+                    if (el && el.textContent?.trim()) {
+                        descriptionElement = el;
+                        break;
+                    }
+                }
+
+                // 작성자 찾기
+                for (const selector of authorSelectors) {
+                    const el = item.querySelector(selector);
+                    if (el && el.textContent?.trim()) {
+                        authorElement = el;
+                        break;
+                    }
+                }
+
+                if (titleElement && blogUrlElement) {
+                    const title = titleElement.textContent?.trim() || "";
+                    const url = blogUrlElement.getAttribute("href") || "";
+                    const description =
+                        descriptionElement?.textContent?.trim() || "";
+                    const author = authorElement?.textContent?.trim() || "";
+
+                    searchResults.push({
+                        title,
+                        url: url.startsWith("http")
+                            ? url
+                            : `https://blog.naver.com${url}`,
+                        description,
+                        author,
+                        date: "", // 네이버 블로그 검색에서는 날짜 정보가 없음
+                        platform: "네이버 블로그",
+                    });
+                }
             });
 
             return {
-                results,
+                results: searchResults,
                 debugInfo,
             };
         },
@@ -243,7 +198,6 @@ export async function extractBlogSearchResults(
                 description: blogDescriptionSelectors,
                 author: blogAuthorSelectors,
             },
-            functionsCode: parseFunctionsCode,
         }
     );
 

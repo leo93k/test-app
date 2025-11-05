@@ -11,7 +11,8 @@ import {
     DEFAULT_TIMEOUT,
     PAGE_NAVIGATION_DELAY,
 } from "@/const";
-import { findAndClick, findAndFill } from "../utils/crawlService";
+import { findAndClick, findAndFill, waitWithLog } from "../utils/crawlService";
+import { navigate } from "../utils";
 
 /**
  * iframe 또는 메인 페이지에서 로그인 버튼 찾기 및 클릭
@@ -77,8 +78,12 @@ export async function fillAndSubmitLoginForm(
 
     // 아이디 입력
     // headless 모드에서 요소가 로드될 때까지 대기
-    await logger.info("⏳ 로그인 폼이 로드될 때까지 대기 중...");
-    await page.waitForTimeout(500);
+    await waitWithLog(
+        page,
+        logger,
+        "⏳ 로그인 폼이 로드될 때까지 대기 중...",
+        500
+    );
 
     const idInputted = await findAndFill(page, idSelectors, username, logger, {
         contextName: "아이디 입력 필드",
@@ -155,8 +160,12 @@ export async function fillAndSubmitLoginForm(
     }
 
     // 로그인 완료 대기
-    await logger.info("⏳ 로그인 완료 대기 중...");
-    await page.waitForTimeout(PAGE_NAVIGATION_DELAY);
+    await waitWithLog(
+        page,
+        logger,
+        "⏳ 로그인 완료 대기 중...",
+        PAGE_NAVIGATION_DELAY
+    );
 }
 
 /**
@@ -255,12 +264,11 @@ export async function navigateBackToBlog(
             const blogId = blogIdMatch[1];
             const blogUrl = `https://blog.naver.com/${blogId}`;
 
-            await logger.info(`📝 블로그 URL로 이동: ${blogUrl}`);
-            await page.goto(blogUrl, {
-                waitUntil: "domcontentloaded",
+            await navigate(page, blogUrl, logger, {
+                contextName: "원래 블로그 페이지",
                 timeout: DEFAULT_TIMEOUT,
+                retry: false,
             });
-            await logger.success("✅ 원래 블로그 페이지로 이동 완료");
 
             await page.waitForTimeout(PAGE_NAVIGATION_DELAY);
         } else {
