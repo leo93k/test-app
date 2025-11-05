@@ -16,3 +16,7 @@ export const PAGE_NAVIGATION_DELAY = 500; // 0.5초
 // ==================== Selector 대기 타임아웃 ====================
 // waitForSelector 타임아웃 (밀리초)
 export const SELECTOR_WAIT_TIMEOUT = 5000; // 5초
+
+// ==================== 브라우저 자동 닫기 지연 시간 ====================
+// 브라우저가 열린 후 자동으로 닫히기까지의 시간 (초)
+export const AUTO_CLOSE_DELAY = 0.5; // 0.5초

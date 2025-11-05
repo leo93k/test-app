@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // 클라이언트 사이드 브라우저 큐 래퍼 (서버 사이드 큐 API 호출)
+import { MAX_CONCURRENT } from "@/const/queue";
 
 interface QueueStatus {
     queueLength: number;
@@ -74,7 +75,7 @@ class BrowserQueue {
             return {
                 queueLength: data.queueLength || 0,
                 runningCount: data.runningCount || 0,
-                maxConcurrent: data.maxConcurrent || 5,
+                maxConcurrent: data.maxConcurrent || MAX_CONCURRENT,
             };
         } catch (error) {
             console.error("Queue status fetch error:", error);
@@ -82,7 +83,7 @@ class BrowserQueue {
             return {
                 queueLength: 0,
                 runningCount: 0,
-                maxConcurrent: 5,
+                maxConcurrent: MAX_CONCURRENT,
             };
         }
     }

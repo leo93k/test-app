@@ -1,20 +1,15 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
+import { MAX_CONCURRENT } from "@/const/queue";
 
 interface SettingsState {
     maxConcurrent: number;
     autoCloseDelay: number;
-    logRetentionDays: number;
-    enableAutoRefresh: boolean;
-    refreshInterval: number;
     maxBlogSearchPages: number;
 }
 
 const initialState: SettingsState = {
-    maxConcurrent: 5,
+    maxConcurrent: MAX_CONCURRENT,
     autoCloseDelay: 0.5,
-    logRetentionDays: 7,
-    enableAutoRefresh: true,
-    refreshInterval: 1000,
     maxBlogSearchPages: 3,
 };
 
@@ -27,15 +22,6 @@ const settingsSlice = createSlice({
         },
         setAutoCloseDelay: (state, action: PayloadAction<number>) => {
             state.autoCloseDelay = action.payload;
-        },
-        setLogRetentionDays: (state, action: PayloadAction<number>) => {
-            state.logRetentionDays = action.payload;
-        },
-        setEnableAutoRefresh: (state, action: PayloadAction<boolean>) => {
-            state.enableAutoRefresh = action.payload;
-        },
-        setRefreshInterval: (state, action: PayloadAction<number>) => {
-            state.refreshInterval = action.payload;
         },
         setMaxBlogSearchPages: (state, action: PayloadAction<number>) => {
             state.maxBlogSearchPages = action.payload;
@@ -53,9 +39,6 @@ const settingsSlice = createSlice({
 export const {
     setMaxConcurrent,
     setAutoCloseDelay,
-    setLogRetentionDays,
-    setEnableAutoRefresh,
-    setRefreshInterval,
     setMaxBlogSearchPages,
     resetSettings,
     loadSettings,

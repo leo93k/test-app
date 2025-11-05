@@ -96,11 +96,8 @@ export default async function handler(
     } catch (error) {
         // 에러 발생 시에도 Logger 사용 시도 (sessionId가 있으면 사용)
         try {
-            const errorSessionId =
-                req.body.sessionId ||
-                `error-${Date.now()}-${Math.random()
-                    .toString(36)
-                    .substr(2, 9)}`;
+            const { nanoid } = await import("nanoid");
+            const errorSessionId = req.body.sessionId || `error-${nanoid()}`;
             const logger = Logger.getInstance(errorSessionId);
             await logger.error(
                 `블로그 검색 오류: ${
