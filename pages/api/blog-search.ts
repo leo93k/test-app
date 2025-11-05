@@ -13,8 +13,8 @@ import {
     NAVER_BLOG_SEARCH_URL,
     PAGE_LOAD_TIMEOUT,
     PAGE_NAVIGATION_DELAY,
-    generateRandomUserAgent,
 } from "@/const";
+import { generateRandomUserAgent } from "@/service/crawler/utils/browserUtils";
 
 interface BlogSearchResult {
     title: string;
