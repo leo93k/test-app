@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 import type { BlogSearchResult } from "./types";
 import type { TabType } from "./Tabs";
@@ -130,6 +130,17 @@ export default function CrawlerTab() {
             setFriendRequestTargets([...friendRequestTargets, result]);
         }
     };
+
+    // 컴포넌트 언마운트 시 진행 중인 요청 모두 취소
+    useEffect(() => {
+        return () => {
+            // 검색 요청 취소
+            if (searchAbortControllerRef.current) {
+                searchAbortControllerRef.current.abort();
+                searchAbortControllerRef.current = null;
+            }
+        };
+    }, []);
 
     return (
         <div className="p-6">

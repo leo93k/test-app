@@ -4,6 +4,8 @@ import { Logger } from "@/service/logger";
 import { useSocket } from "@/lib/hooks/useSocket";
 import { useAppSelector } from "@/lib/hooks";
 import type { BlogSearchResult } from "./types";
+import { socketClient } from "@/lib/socket";
+import { SOCKET_EVENTS } from "@/const/socketEvents";
 import { Progress } from "@/components/ui/progress";
 import {
     Accordion,
@@ -60,6 +62,92 @@ export default function FriendRequestSection({
     // Socket.io 연결 상태 및 sessionId 가져오기
     const { isConnected, sessionId } = useSocket();
 
+    // 큐 작업 결과 수신을 위한 소켓 리스너
+    useEffect(() => {
+        if (!sessionId) return;
+
+        const handleQueueResult = (data: {
+            url: string;
+            success: boolean;
+            status:
+                | "success"
+                | "already-friend"
+                | "already-requesting"
+                | "failed";
+            error?: string;
+        }) => {
+            // URL로 해당 블로그 찾기
+            const blog = friendRequestTargets.find((b) => b.url === data.url);
+            if (!blog) return;
+
+            // 상태 업데이트
+            setBlogStatuses((prev) => {
+                const newStatuses = new Map(prev);
+                newStatuses.set(blog.url, data.status);
+                return newStatuses;
+            });
+
+            // 에러 메시지 설정
+            if (data.status === "failed" && data.error) {
+                setBlogErrors((prev) => {
+                    const newErrors = new Map(prev);
+                    newErrors.set(blog.url, data.error || "알 수 없는 오류");
+                    return newErrors;
+                });
+            }
+
+            // 로그 메시지
+            const logger = Logger.getInstance(sessionId);
+            if (data.status === "success") {
+                logger.success(`✅ 서로이웃 추가 완료: ${blog.title}`);
+            } else if (data.status === "already-friend") {
+                logger.info(`ℹ️ 이미 이웃 상태: ${blog.title}`);
+            } else if (data.status === "already-requesting") {
+                logger.info(`ℹ️ 이미 신청 중: ${blog.title}`);
+            } else {
+                logger.error(
+                    `❌ 서로이웃 추가 실패: ${blog.title} - ${
+                        data.error || "알 수 없는 오류"
+                    }`
+                );
+            }
+        };
+
+        const setupListener = (): (() => void) | null => {
+            const socket = socketClient.getSocket();
+            if (!socket) return null;
+
+            socket.on(SOCKET_EVENTS.QUEUE_RESULT, handleQueueResult);
+
+            return () => {
+                socket.off(SOCKET_EVENTS.QUEUE_RESULT, handleQueueResult);
+            };
+        };
+
+        // 먼저 소켓이 있는지 확인
+        let cleanup: (() => void) | null = setupListener();
+
+        // 소켓이 없으면 주기적으로 확인
+        if (!cleanup) {
+            const checkInterval = setInterval(() => {
+                const newCleanup = setupListener();
+                if (newCleanup) {
+                    cleanup = newCleanup;
+                    clearInterval(checkInterval);
+                }
+            }, 1000);
+
+            return () => {
+                clearInterval(checkInterval);
+                if (cleanup) cleanup();
+            };
+        }
+
+        return () => {
+            if (cleanup) cleanup();
+        };
+    }, [sessionId, friendRequestTargets]);
+
     // Redux에서 최대 동시 실행 브라우저 수 가져오기
     const maxConcurrent = useAppSelector(
         (state) => state.settings.maxConcurrent
@@ -95,6 +183,30 @@ export default function FriendRequestSection({
         }>[]
     >([]);
 
+    // 컴포넌트 언마운트 시 진행 중인 요청 모두 취소
+    useEffect(() => {
+        return () => {
+            // AbortController로 진행 중인 요청 취소
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+                abortControllerRef.current = null;
+            }
+
+            // 진행 중인 Promise들 취소 (가능한 경우)
+            ongoingRequestsRef.current = [];
+
+            // 로딩 상태 초기화 (setState는 cleanup에서 안전하게 호출 가능)
+            try {
+                setFriendRequestLoading(false);
+                setLoginTestLoading(false);
+                onLoadingChange(false);
+            } catch (error) {
+                // 컴포넌트가 이미 언마운트된 경우 무시
+                console.warn("Cleanup: Component already unmounted", error);
+            }
+        };
+    }, [onLoadingChange]);
+
     // 각 블로그의 상태 추적
     type BlogStatus =
         | "pending"
@@ -102,7 +214,8 @@ export default function FriendRequestSection({
         | "success"
         | "already-friend"
         | "already-requesting"
-        | "failed";
+        | "failed"
+        | "queued";
     const [blogStatuses, setBlogStatuses] = useState<Map<string, BlogStatus>>(
         new Map()
     );
@@ -363,7 +476,10 @@ export default function FriendRequestSection({
 
             // 큐 처리 함수
             const processQueue = async () => {
-                while (currentIndex < friendRequestTargets.length) {
+                while (
+                    currentIndex < friendRequestTargets.length &&
+                    !signal.aborted
+                ) {
                     // 중지되었는지 확인
                     if (signal.aborted) {
                         // 남은 모든 블로그를 실패 처리
@@ -394,11 +510,15 @@ export default function FriendRequestSection({
                         break;
                     }
 
-                    // 최대 동시 실행 수에 도달하면 대기
+                    // 최대 동시 실행 수에 도달하면 대기 (중지되었으면 즉시 종료)
                     if (runningCount >= maxConcurrent) {
                         await new Promise((resolve) =>
                             setTimeout(resolve, 100)
                         );
+                        // 대기 중에도 중지되었는지 확인
+                        if (signal.aborted) {
+                            break;
+                        }
                         continue;
                     }
 
@@ -406,6 +526,15 @@ export default function FriendRequestSection({
                     const blog = friendRequestTargets[currentIndex];
                     const index = currentIndex;
                     currentIndex++;
+
+                    // 초기 상태를 "pending"으로 설정 (아직 처리 시작 전)
+                    setBlogStatuses((prev) => {
+                        const newStatuses = new Map(prev);
+                        if (!newStatuses.has(blog.url)) {
+                            newStatuses.set(blog.url, "pending");
+                        }
+                        return newStatuses;
+                    });
                     runningCount++;
 
                     // 블로그 처리 함수
@@ -445,7 +574,29 @@ export default function FriendRequestSection({
                                 }`
                             );
 
-                            const response = await fetch("/api/crawl", {
+                            // 중지되었는지 확인 (큐에 추가하기 전에)
+                            if (signal.aborted) {
+                                setBlogStatuses((prev) => {
+                                    const newStatuses = new Map(prev);
+                                    newStatuses.set(blog.url, "failed");
+                                    return newStatuses;
+                                });
+                                setBlogErrors((prev) => {
+                                    const newErrors = new Map(prev);
+                                    newErrors.set(blog.url, "중지됨");
+                                    return newErrors;
+                                });
+                                return {
+                                    success: false,
+                                    blog,
+                                    index,
+                                    error: "중지됨",
+                                    status: "failed" as const,
+                                };
+                            }
+
+                            // 큐에 작업 추가
+                            const addResponse = await fetch("/api/queue/add", {
                                 method: "POST",
                                 headers: {
                                     "Content-Type": "application/json",
@@ -461,6 +612,20 @@ export default function FriendRequestSection({
                                 }),
                                 signal,
                             });
+
+                            if (!addResponse.ok) {
+                                const errorData = await addResponse
+                                    .json()
+                                    .catch(() => ({}));
+                                throw new Error(
+                                    errorData?.error ||
+                                        `큐에 작업 추가 실패 (${addResponse.status})`
+                                );
+                            }
+
+                            const queueData = await addResponse.json();
+
+                            // 큐에 추가 완료 - "queued" 상태로 이미 설정됨
 
                             // 중지되었는지 확인
                             if (signal.aborted) {
@@ -483,115 +648,25 @@ export default function FriendRequestSection({
                                 };
                             }
 
-                            const data = await response.json();
+                            // 큐에 추가된 경우 즉시 처리 완료 상태로 표시
+                            // 실제 작업은 서버에서 비동기로 처리되며, 결과는 소켓 로그로 전달됨
+                            await logger.info(
+                                `✅ 큐에 작업 추가 완료: ${blog.title} (Queue ID: ${queueData.queueId})`
+                            );
 
-                            if (!response.ok) {
-                                const errorMessage = data.details
-                                    ? `${data.error}: ${data.details}`
-                                    : data.error ||
-                                      "서로이웃 추가 요청에 실패했습니다.";
-                                const status = data.status || "failed";
-                                setBlogStatuses((prev) => {
-                                    const newStatuses = new Map(prev);
-                                    newStatuses.set(
-                                        blog.url,
-                                        status as BlogStatus
-                                    );
-                                    return newStatuses;
-                                });
-                                setBlogErrors((prev) => {
-                                    const newErrors = new Map(prev);
-                                    newErrors.set(blog.url, errorMessage);
-                                    return newErrors;
-                                });
-                                throw new Error(errorMessage);
-                            }
-
-                            const status =
-                                data.status ||
-                                (data.success ? "success" : "failed");
-
-                            if (status === "failed" || !data.success) {
-                                const errorMessage =
-                                    data.error ||
-                                    "서로이웃 추가에 실패했습니다.";
-                                setBlogStatuses((prev) => {
-                                    const newStatuses = new Map(prev);
-                                    newStatuses.set(blog.url, "failed");
-                                    return newStatuses;
-                                });
-                                setBlogErrors((prev) => {
-                                    const newErrors = new Map(prev);
-                                    newErrors.set(blog.url, errorMessage);
-                                    return newErrors;
-                                });
-                                await logger.error(
-                                    `❌ 블로그 ${
-                                        index + 1
-                                    } 서로이웃 추가 실패: ${errorMessage}`
-                                );
-                                return {
-                                    success: false,
-                                    blog,
-                                    index,
-                                    error: errorMessage,
-                                    status: "failed" as const,
-                                };
-                            }
-
-                            // "already-requesting" 또는 "already-friend" 상태 처리
-                            if (
-                                status === "already-requesting" ||
-                                status === "already-friend"
-                            ) {
-                                setBlogStatuses((prev) => {
-                                    const newStatuses = new Map(prev);
-                                    newStatuses.set(
-                                        blog.url,
-                                        status as BlogStatus
-                                    );
-                                    return newStatuses;
-                                });
-
-                                if (status === "already-requesting") {
-                                    await logger.info(
-                                        `ℹ️ 블로그 ${
-                                            index + 1
-                                        } 이미 추가 중입니다: ${blog.title}`
-                                    );
-                                } else {
-                                    await logger.info(
-                                        `ℹ️ 블로그 ${
-                                            index + 1
-                                        } 이미 이웃 상태입니다: ${blog.title}`
-                                    );
-                                }
-
-                                return {
-                                    success: true,
-                                    blog,
-                                    index,
-                                    status: status as typeof status,
-                                };
-                            }
-
-                            // 정상 성공 처리
                             setBlogStatuses((prev) => {
                                 const newStatuses = new Map(prev);
-                                newStatuses.set(blog.url, status as BlogStatus);
+                                newStatuses.set(blog.url, "queued");
                                 return newStatuses;
                             });
 
-                            await logger.success(
-                                `✅ 블로그 ${index + 1} 서로이웃 추가 완료: ${
-                                    blog.title
-                                }`
-                            );
+                            // 큐에 추가된 것으로 처리 (실제 결과는 서버에서 비동기로 처리됨)
+                            // Note: 실제 결과는 서버에서 비동기로 처리되며, 소켓 로그로 전달됨
                             return {
                                 success: true,
                                 blog,
                                 index,
-                                status: status as typeof status,
+                                status: "success" as const, // 큐에 추가된 것으로 성공 처리
                             };
                         } catch (error) {
                             if (
@@ -669,9 +744,33 @@ export default function FriendRequestSection({
                         });
                 }
 
-                // 모든 작업이 완료될 때까지 대기
-                while (runningCount > 0) {
+                // 모든 작업이 완료될 때까지 대기 (중지되었으면 즉시 종료)
+                while (runningCount > 0 && !signal.aborted) {
                     await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+
+                // 중지되었으면 남은 작업들도 즉시 종료
+                if (signal.aborted) {
+                    // 진행 중이었던 블로그들을 실패 처리
+                    friendRequestTargets.forEach((blog) => {
+                        const currentStatus = blogStatuses.get(blog.url);
+                        if (
+                            currentStatus === "pending" ||
+                            currentStatus === "processing" ||
+                            currentStatus === "queued"
+                        ) {
+                            setBlogStatuses((prev) => {
+                                const newStatuses = new Map(prev);
+                                newStatuses.set(blog.url, "failed");
+                                return newStatuses;
+                            });
+                            setBlogErrors((prev) => {
+                                const newErrors = new Map(prev);
+                                newErrors.set(blog.url, "중지됨");
+                                return newErrors;
+                            });
+                        }
+                    });
                 }
             };
 
@@ -1110,7 +1209,7 @@ export default function FriendRequestSection({
                                         <div className="space-y-1.5">
                                             <div className="flex items-center justify-between pl-2">
                                                 <span className="text-gray-600 dark:text-gray-400">
-                                                    대기중:
+                                                    대기중/큐:
                                                 </span>
                                                 <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
                                                     {
@@ -1119,7 +1218,9 @@ export default function FriendRequestSection({
                                                         ).filter(
                                                             (status) =>
                                                                 status ===
-                                                                "pending"
+                                                                    "pending" ||
+                                                                status ===
+                                                                    "queued"
                                                         ).length
                                                     }
                                                     개
@@ -1136,7 +1237,9 @@ export default function FriendRequestSection({
                                                         ).filter(
                                                             (status) =>
                                                                 status ===
-                                                                "processing"
+                                                                    "processing" ||
+                                                                status ===
+                                                                    "queued"
                                                         ).length
                                                     }
                                                     개
