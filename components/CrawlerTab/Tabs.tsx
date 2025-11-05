@@ -29,7 +29,7 @@ export default function Tabs({ activeTab, onTabChange }: TabsProps) {
                             : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
                     }`}
                 >
-                    📋 로그
+                    📋 로그 테스트
                 </button>
             </nav>
         </div>
