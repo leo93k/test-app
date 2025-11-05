@@ -232,19 +232,38 @@ export default function FriendRequestSection({
         }
     }, [friendRequestTargets.length]);
 
+    // 상태별 카운트 계산 (한 번만 계산하여 재사용)
+    const statusCounts = useMemo(() => {
+        const counts = {
+            pending: 0,
+            processing: 0,
+            queued: 0,
+            success: 0,
+            "already-friend": 0,
+            "already-requesting": 0,
+            failed: 0,
+        };
+
+        // Map을 한 번만 순회하여 모든 카운트 계산
+        blogStatuses.forEach((status) => {
+            if (status in counts) {
+                counts[status as keyof typeof counts]++;
+            }
+        });
+
+        return counts;
+    }, [blogStatuses]);
+
     // 진행률 계산
     const progressPercentage = useMemo(() => {
         if (friendRequestTargets.length === 0) return 0;
-        const statuses = Array.from(blogStatuses.values());
-        const completedCount = statuses.filter(
-            (status) =>
-                status === "success" ||
-                status === "already-friend" ||
-                status === "already-requesting" ||
-                status === "failed"
-        ).length;
+        const completedCount =
+            statusCounts.success +
+            statusCounts["already-friend"] +
+            statusCounts["already-requesting"] +
+            statusCounts.failed;
         return Math.round((completedCount / friendRequestTargets.length) * 100);
-    }, [blogStatuses, friendRequestTargets.length]);
+    }, [statusCounts, friendRequestTargets.length]);
 
     // 상태별 블로그 리스트
     const blogsByStatus = useMemo(() => {
@@ -1077,7 +1096,6 @@ export default function FriendRequestSection({
                             </p>
                         </div>
                     </div>
-
                     {/* 오른쪽: 대상 블로그 목록 및 상태 */}
                     <div className="space-y-4">
                         <h4 className="text-lg font-medium text-gray-700 dark:text-gray-300">
@@ -1212,17 +1230,8 @@ export default function FriendRequestSection({
                                                     대기중/큐:
                                                 </span>
                                                 <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
-                                                    {
-                                                        Array.from(
-                                                            blogStatuses.values()
-                                                        ).filter(
-                                                            (status) =>
-                                                                status ===
-                                                                    "pending" ||
-                                                                status ===
-                                                                    "queued"
-                                                        ).length
-                                                    }
+                                                    {statusCounts.pending +
+                                                        statusCounts.queued}
                                                     개
                                                 </span>
                                             </div>
@@ -1231,23 +1240,29 @@ export default function FriendRequestSection({
                                                     진행중:
                                                 </span>
                                                 <span className="px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200">
-                                                    {
-                                                        Array.from(
-                                                            blogStatuses.values()
-                                                        ).filter(
-                                                            (status) =>
-                                                                status ===
-                                                                    "processing" ||
-                                                                status ===
-                                                                    "queued"
-                                                        ).length
-                                                    }
+                                                    {statusCounts.processing +
+                                                        statusCounts.queued}
+                                                    개
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center justify-between pl-2">
+                                                <span className="text-gray-600 dark:text-gray-400">
+                                                    완료:
+                                                </span>
+                                                <span className="px-2 py-0.5 rounded bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200">
+                                                    {statusCounts.success +
+                                                        statusCounts[
+                                                            "already-friend"
+                                                        ] +
+                                                        statusCounts[
+                                                            "already-requesting"
+                                                        ] +
+                                                        statusCounts.failed}
                                                     개
                                                 </span>
                                             </div>
                                         </div>
                                     </div>
-                                    {/* 원형 프로그레스 (RadialBarChart) */}
                                 </div>
 
                                 {/* 두 번째 줄: 결과 */}
@@ -1263,15 +1278,7 @@ export default function FriendRequestSection({
                                                 서이추 성공
                                             </span>
                                             <span className="px-2 py-0.5 rounded bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200">
-                                                {
-                                                    Array.from(
-                                                        blogStatuses.values()
-                                                    ).filter(
-                                                        (status) =>
-                                                            status === "success"
-                                                    ).length
-                                                }
-                                                개
+                                                {statusCounts.success}개
                                             </span>
                                         </div>
                                         <div className="flex items-center justify-between pl-2">
@@ -1279,15 +1286,7 @@ export default function FriendRequestSection({
                                                 이미 이웃입니다.
                                             </span>
                                             <span className="px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
-                                                {
-                                                    Array.from(
-                                                        blogStatuses.values()
-                                                    ).filter(
-                                                        (status) =>
-                                                            status ===
-                                                            "already-friend"
-                                                    ).length
-                                                }
+                                                {statusCounts["already-friend"]}
                                                 개
                                             </span>
                                         </div>
@@ -1297,13 +1296,9 @@ export default function FriendRequestSection({
                                             </span>
                                             <span className="px-2 py-0.5 rounded bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200">
                                                 {
-                                                    Array.from(
-                                                        blogStatuses.values()
-                                                    ).filter(
-                                                        (status) =>
-                                                            status ===
-                                                            "already-requesting"
-                                                    ).length
+                                                    statusCounts[
+                                                        "already-requesting"
+                                                    ]
                                                 }
                                                 개
                                             </span>
@@ -1313,15 +1308,7 @@ export default function FriendRequestSection({
                                                 실패입니다.
                                             </span>
                                             <span className="px-2 py-0.5 rounded bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200">
-                                                {
-                                                    Array.from(
-                                                        blogStatuses.values()
-                                                    ).filter(
-                                                        (status) =>
-                                                            status === "failed"
-                                                    ).length
-                                                }
-                                                개
+                                                {statusCounts.failed}개
                                             </span>
                                         </div>
                                     </div>
