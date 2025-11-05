@@ -1,8 +1,2 @@
-export interface BlogSearchResult {
-    title: string;
-    url: string;
-    description: string;
-    author: string;
-    date: string;
-    platform: string;
-}
+// BlogSearchResult는 service/crawler/blogSearch/types에서 import
+export type { BlogSearchResult } from "@/service/crawler/blogSearchService/blogSearchServiceType";

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Page, ElementHandle, Frame } from "playwright";
-import { Logger } from "../../logger";
+import { Logger } from "@/service/logger";
 import { SELECTOR_WAIT_TIMEOUT } from "@/const";
 
 /**
@@ -252,4 +252,21 @@ export function isPage(target: any): target is Page {
  */
 export function isFrame(target: any): target is Frame {
     return target && typeof target.url === "function" && !target.browser;
+}
+
+/**
+ * 로그와 함께 대기하는 함수
+ * @param target - Page 또는 Frame (waitForTimeout 메서드가 있는 객체)
+ * @param logger - Logger 인스턴스
+ * @param message - 로그 메시지
+ * @param timeout - 대기 시간 (밀리초)
+ */
+export async function waitWithLog(
+    target: Page | Frame,
+    logger: Logger,
+    message: string,
+    timeout: number
+): Promise<void> {
+    await logger.info(message);
+    await target.waitForTimeout(timeout);
 }
