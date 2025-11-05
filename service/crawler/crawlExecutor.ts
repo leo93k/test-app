@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { chromium, Browser, BrowserContext, Page } from "playwright";
+import { nanoid } from "nanoid";
 import { createLoginService } from "./loginService";
 import { Logger } from "@/service/logger";
 import { createFriendRequestService } from "./friendRequestService";
@@ -59,12 +60,13 @@ export async function executeCrawl(
     }
 
     // Logger 인스턴스 생성
-    const loggerSessionId =
-        sessionId ||
-        `server-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const loggerSessionId = sessionId || `server-${nanoid()}`;
     const logger = Logger.getInstance(loggerSessionId);
 
     let browser: Browser | null = null;
+    let context: BrowserContext | null = null;
+    let page: Page | null = null;
+    let loginPage: Page | null = null;
 
     try {
         await logger.info(`크롤링 시작: ${url}`);
@@ -90,7 +92,7 @@ export async function executeCrawl(
         const randomUserAgent = generateRandomUserAgent();
         await logger.info(`🔀 생성된 User-Agent: ${randomUserAgent}`);
 
-        const context = await browser.newContext({
+        context = await browser.newContext({
             userAgent: randomUserAgent,
             viewport: { width: 1920, height: 1080 },
             locale: "ko-KR",
@@ -121,78 +123,43 @@ export async function executeCrawl(
         if (username && password && !friendRequest) {
             await logger.info("🔐 로그인 수행 중...");
 
-            const loginPage = await context.newPage();
+            loginPage = await context.newPage();
             const crawlService = createCrawlService(logger);
 
-            try {
-                await crawlService.navigateToPage(loginPage, LOGIN_URL, {
-                    headless,
-                    timeout: DEFAULT_TIMEOUT,
-                    retry: false,
-                });
-
-                const loginService = createLoginService(loginPage, logger);
-                const loginResult = await loginService.execute({
-                    username,
-                    password,
-                });
-
-                if (!loginResult.success) {
-                    await logger.error(`로그인 실패: ${loginResult.message}`);
-                    await loginPage.close();
-                    await browser.close();
-                    return {
-                        success: false,
-                        error: loginResult.message,
-                    };
-                }
-
-                await logger.success("✅ 로그인 완료");
-                await loginPage.close();
-            } catch (error) {
-                await loginPage.close();
-                await browser.close();
-                throw error;
-            }
-        }
-
-        // 작업 페이지 생성 (로그인된 컨텍스트 사용)
-        const page = await context.newPage();
-
-        // 페이지 로드 및 대기
-        try {
-            const crawlService = createCrawlService(logger);
-            await crawlService.navigateToPage(page, url, {
+            await crawlService.navigateToPage(loginPage, LOGIN_URL, {
                 headless,
                 timeout: DEFAULT_TIMEOUT,
                 retry: false,
-                waitUntil: headless ? "networkidle" : "domcontentloaded",
             });
-        } catch (gotoError) {
-            const errorMessage =
-                gotoError instanceof Error
-                    ? gotoError.message
-                    : String(gotoError);
-            await logger.error(`페이지 로딩 실패: ${errorMessage}`);
 
-            if (browser) {
-                try {
-                    await browser.close();
-                    await logger.info(
-                        "타임아웃으로 인해 브라우저를 닫았습니다"
-                    );
-                } catch (closeError) {
-                    await logger.error(`브라우저 닫기 오류: ${closeError}`);
-                }
+            const loginService = createLoginService(loginPage, logger);
+            const loginResult = await loginService.execute({
+                username,
+                password,
+            });
+
+            if (!loginResult.success) {
+                await logger.error(`로그인 실패: ${loginResult.message}`);
+                return {
+                    success: false,
+                    error: loginResult.message,
+                };
             }
 
-            return {
-                success: false,
-                error: errorMessage.includes("Timeout")
-                    ? `페이지 로딩 타임아웃: 페이지 로딩 시간(${DEFAULT_TIMEOUT}ms)을 초과했습니다.`
-                    : `페이지 로딩 실패: ${errorMessage}`,
-            };
+            await logger.success("✅ 로그인 완료");
         }
+
+        // 작업 페이지 생성 (로그인된 컨텍스트 사용)
+        page = await context.newPage();
+
+        // 페이지 로드 및 대기
+        const crawlService = createCrawlService(logger);
+        await crawlService.navigateToPage(page, url, {
+            headless,
+            timeout: DEFAULT_TIMEOUT,
+            retry: false,
+            waitUntil: headless ? "networkidle" : "domcontentloaded",
+        });
 
         if (!friendRequest) {
             return {
@@ -228,17 +195,6 @@ export async function executeCrawl(
                 error instanceof Error ? error.message : "알 수 없는 오류";
         }
 
-        // 성공하면 브라우저 닫기
-        if (browser) {
-            try {
-                await logger.info("서로이웃 추가 완료. 브라우저를 닫습니다...");
-                await browser.close();
-                await logger.success("브라우저를 닫았습니다");
-            } catch (closeError) {
-                await logger.error(`브라우저 닫기 오류: ${closeError}`);
-            }
-        }
-
         if (friendRequestStatus === "failed") {
             return {
                 success: false,
@@ -264,23 +220,84 @@ export async function executeCrawl(
             }`
         );
 
-        if (browser) {
-            try {
-                await logger.info("오류로 인해 브라우저 강제 닫기 시작...");
-                await browser.close();
-                await logger.success("오류로 인해 브라우저를 닫았습니다");
-            } catch (closeError) {
-                await logger.error(`브라우저 닫기 오류: ${closeError}`);
-            }
+        // 에러 발생 시 에러 메시지가 포함된 결과 반환
+        const errorMessage =
+            error instanceof Error ? error.message : "알 수 없는 오류";
+
+        // 페이지 로딩 실패인 경우 특별 처리
+        if (
+            errorMessage.includes("Timeout") ||
+            errorMessage.includes("timeout")
+        ) {
+            return {
+                success: false,
+                error: `페이지 로딩 타임아웃: 페이지 로딩 시간(${DEFAULT_TIMEOUT}ms)을 초과했습니다.`,
+            };
         }
 
         return {
             success: false,
             status: "failed",
-            error:
-                error instanceof Error
-                    ? error.message
-                    : "Failed to crawl the website",
+            error: errorMessage,
         };
+    } finally {
+        // 리소스 정리: keepOpen이 false일 때만 브라우저를 닫음
+        // keepOpen이 true인 경우 브라우저는 유지되어야 하므로 정리하지 않음
+        if (!keepOpen && (browser || context || page || loginPage)) {
+            try {
+                // 페이지들 먼저 정리
+                if (loginPage && !loginPage.isClosed()) {
+                    await loginPage.close().catch((err) => {
+                        logger
+                            .error(`로그인 페이지 닫기 오류: ${err}`)
+                            .catch(() => {});
+                    });
+                }
+
+                if (page && !page.isClosed()) {
+                    await page.close().catch((err) => {
+                        logger
+                            .error(`작업 페이지 닫기 오류: ${err}`)
+                            .catch(() => {});
+                    });
+                }
+
+                // 컨텍스트 정리
+                if (context) {
+                    await context.close().catch((err) => {
+                        logger
+                            .error(`컨텍스트 닫기 오류: ${err}`)
+                            .catch(() => {});
+                    });
+                }
+
+                // 브라우저 정리
+                if (browser) {
+                    await browser.close().catch((err) => {
+                        logger
+                            .error(`브라우저 닫기 오류: ${err}`)
+                            .catch(() => {});
+                    });
+                    await logger.info("리소스 정리 완료").catch(() => {});
+                }
+            } catch (cleanupError) {
+                await logger
+                    .error(
+                        `리소스 정리 중 오류 발생: ${
+                            cleanupError instanceof Error
+                                ? cleanupError.message
+                                : "알 수 없는 오류"
+                        }`
+                    )
+                    .catch(() => {});
+            }
+        } else if (keepOpen && browser) {
+            // keepOpen이 true인 경우 로그만 남김
+            await logger
+                .info(
+                    "keepOpen 옵션이 활성화되어 브라우저를 유지합니다. 수동으로 정리해야 합니다."
+                )
+                .catch(() => {});
+        }
     }
 }

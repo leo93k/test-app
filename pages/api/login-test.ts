@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { Server as HTTPServer } from "http";
-import { chromium } from "playwright";
+import { chromium, Browser, BrowserContext, Page } from "playwright";
+import { nanoid } from "nanoid";
 import { createLoginService } from "@/service/crawler/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
@@ -40,11 +41,12 @@ export default async function handler(
     // Socket.io 서버 초기화 (로깅을 위해)
     await initializeSocketServer(res.socket.server);
 
-    let browser = null;
+    let browser: Browser | null = null;
+    let context: BrowserContext | null = null;
+    let page: Page | null = null;
+
     // 클라이언트에서 전송한 sessionId 사용, 없으면 생성
-    const sessionId =
-        req.body.sessionId ||
-        `server-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const sessionId = req.body.sessionId || `server-${nanoid()}`;
     const logger = Logger.getInstance(sessionId);
 
     try {
@@ -82,7 +84,7 @@ export default async function handler(
         await logger.info(`🔀 생성된 User-Agent: ${randomUserAgent}`);
 
         // 봇 탐지 우회를 위한 추가 설정
-        const context = await browser.newContext({
+        context = await browser.newContext({
             userAgent: randomUserAgent,
             viewport: { width: 1920, height: 1080 }, // 표준 뷰포트 크기
             locale: "ko-KR", // 한국어 로케일
@@ -109,7 +111,7 @@ export default async function handler(
         await context.addInitScript(getBotDetectionBypassScript());
 
         // 새 페이지 생성
-        const page = await context.newPage();
+        page = await context.newPage();
 
         // 페이지 로드 및 대기
         const crawlService = createCrawlService(logger);
@@ -264,20 +266,39 @@ export default async function handler(
             error: errorMessage,
         });
     } finally {
-        // 브라우저 종료
-        if (browser) {
-            try {
-                await browser.close();
-                await logger.info("브라우저 종료 완료");
-            } catch (closeError) {
-                await logger.error(
-                    `브라우저 종료 중 오류: ${
-                        closeError instanceof Error
-                            ? closeError.message
+        // 리소스 정리: 페이지 → 컨텍스트 → 브라우저 순서로 정리
+        try {
+            // 페이지 정리
+            if (page && !page.isClosed()) {
+                await page.close().catch((err) => {
+                    logger.error(`페이지 닫기 오류: ${err}`).catch(() => {});
+                });
+            }
+
+            // 컨텍스트 정리
+            if (context) {
+                await context.close().catch((err) => {
+                    logger.error(`컨텍스트 닫기 오류: ${err}`).catch(() => {});
+                });
+            }
+
+            // 브라우저 정리
+            if (browser) {
+                await browser.close().catch((err) => {
+                    logger.error(`브라우저 닫기 오류: ${err}`).catch(() => {});
+                });
+                await logger.info("리소스 정리 완료").catch(() => {});
+            }
+        } catch (cleanupError) {
+            await logger
+                .error(
+                    `리소스 정리 중 오류 발생: ${
+                        cleanupError instanceof Error
+                            ? cleanupError.message
                             : "알 수 없는 오류"
                     }`
-                );
-            }
+                )
+                .catch(() => {});
         }
     }
 }
