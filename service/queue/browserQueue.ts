@@ -1,5 +1,19 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 // 서버 사이드 큐 관리 시스템
+import { nanoid } from "nanoid";
+import { MAX_CONCURRENT, QUEUE_ID_PREFIX } from "@/const/queue";
+
+// Socket.io 타입 정의
+interface ServerSocket {
+    id: string;
+    data: {
+        sessionId?: string;
+    };
+    emit: (event: string, ...args: unknown[]) => void;
+}
+
+interface SocketIOServer {
+    fetchSockets: () => Promise<ServerSocket[]>;
+}
 
 interface QueueItem {
     id: string;
@@ -22,15 +36,14 @@ interface QueueStatus {
 class ServerQueue {
     private queue: QueueItem[] = [];
     private running: Map<string, QueueItem> = new Map();
-    private maxConcurrent: number = 5; // 기본값
+    private maxConcurrent: number = MAX_CONCURRENT;
+    private isProcessing: boolean = false; // Race Condition 방지용 플래그
 
     /**
      * 큐에 작업 추가
      */
     async add(item: Omit<QueueItem, "id" | "createdAt">): Promise<string> {
-        const id = `queue-${Date.now()}-${Math.random()
-            .toString(36)
-            .substr(2, 9)}`;
+        const id = `${QUEUE_ID_PREFIX}-${nanoid()}`;
         const queueItem: QueueItem = {
             ...item,
             id,
@@ -41,15 +54,25 @@ class ServerQueue {
         console.log(
             `[Queue] 작업 추가: ${id}, 큐 길이: ${this.queue.length}, 실행 중: ${this.running.size}`
         );
-        this.processQueue();
+        // 큐 처리 (비동기이지만 에러 처리)
+        void this.processQueue().catch((error) => {
+            console.error(`[Queue] 작업 추가 후 큐 처리 오류:`, error);
+        });
 
         return id;
     }
 
     /**
      * 큐 처리 (비동기)
+     * Race Condition 방지를 위해 동시 실행을 방지합니다.
      */
-    private async processQueue() {
+    private async processQueue(): Promise<void> {
+        // 이미 처리 중이면 중복 실행 방지
+        if (this.isProcessing) {
+            return;
+        }
+
+        // 실행 한도 도달 또는 큐가 비어있으면 종료
         if (
             this.running.size >= this.maxConcurrent ||
             this.queue.length === 0
@@ -62,30 +85,47 @@ class ServerQueue {
             return;
         }
 
-        const item = this.queue.shift();
-        if (!item) return;
+        // 처리 시작
+        this.isProcessing = true;
 
-        this.running.set(item.id, item);
-        console.log(
-            `[Queue] 작업 시작: ${item.id}, 큐 길이: ${this.queue.length}, 실행 중: ${this.running.size}`
-        );
+        try {
+            // 큐에서 아이템 가져오기 (원자적 연산)
+            const item = this.queue.shift();
+            if (!item) {
+                this.isProcessing = false;
+                return;
+            }
 
-        // 비동기로 실행 (await하지 않음)
-        this.executeBrowser(item)
-            .then(() => {
-                console.log(
-                    `[Queue] 작업 완료: ${item.id}, 실행 중: ${this.running.size}`
-                );
-                this.running.delete(item.id);
-                // 다음 아이템 처리
-                setTimeout(() => this.processQueue(), 100);
-            })
-            .catch((error) => {
-                console.error(`[Queue] 작업 실패: ${item.id}`, error);
-                this.running.delete(item.id);
-                // 다음 아이템 처리
-                setTimeout(() => this.processQueue(), 100);
-            });
+            // 실행 중인 작업에 추가 (원자적 연산)
+            this.running.set(item.id, item);
+            console.log(
+                `[Queue] 작업 시작: ${item.id}, 큐 길이: ${this.queue.length}, 실행 중: ${this.running.size}`
+            );
+
+            // 처리 플래그 해제 (다음 항목 처리 가능)
+            this.isProcessing = false;
+
+            // 비동기로 실행 (await하지 않음)
+            this.executeBrowser(item)
+                .then(() => {
+                    console.log(
+                        `[Queue] 작업 완료: ${item.id}, 실행 중: ${this.running.size}`
+                    );
+                    this.running.delete(item.id);
+                    // 다음 아이템 처리
+                    setTimeout(() => this.processQueue(), 100);
+                })
+                .catch((error) => {
+                    console.error(`[Queue] 작업 실패: ${item.id}`, error);
+                    this.running.delete(item.id);
+                    // 다음 아이템 처리
+                    setTimeout(() => this.processQueue(), 100);
+                });
+        } catch (error) {
+            // 오류 발생 시 처리 플래그 해제
+            this.isProcessing = false;
+            console.error(`[Queue] 큐 처리 중 오류:`, error);
+        }
     }
 
     /**
@@ -119,7 +159,7 @@ class ServerQueue {
                         // 해당 세션의 클라이언트에만 결과 전송
                         const sockets = await io.fetchSockets();
                         const sessionSockets = sockets.filter(
-                            (socket: any) =>
+                            (socket: ServerSocket) =>
                                 socket.data.sessionId === item.sessionId
                         );
 
@@ -165,7 +205,7 @@ class ServerQueue {
                     if (io) {
                         const sockets = await io.fetchSockets();
                         const sessionSockets = sockets.filter(
-                            (socket: any) =>
+                            (socket: ServerSocket) =>
                                 socket.data.sessionId === item.sessionId
                         );
 
@@ -244,12 +284,16 @@ class ServerQueue {
     }
 
     /**
-     * 최대 동시 실행 수 설정
+     * 최대 동시 실행 수 설정 (고정값 5)
+     * @deprecated 최대 동시 실행 수는 5로 고정되어 있습니다.
      */
     setMaxConcurrent(max: number): void {
-        this.maxConcurrent = Math.max(1, max);
-        // 설정 변경 시 큐 처리 재시도
-        this.processQueue();
+        // 최대 동시 실행 수는 MAX_CONCURRENT로 고정
+        this.maxConcurrent = MAX_CONCURRENT;
+        // 설정 변경 시 큐 처리 재시도 (비동기이지만 에러 처리)
+        void this.processQueue().catch((error) => {
+            console.error(`[Queue] setMaxConcurrent 후 큐 처리 오류:`, error);
+        });
     }
 }
 
