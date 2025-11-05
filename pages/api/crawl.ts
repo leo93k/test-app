@@ -81,10 +81,12 @@ export default async function handler(
         page.setDefaultTimeout(DEFAULT_TIMEOUT);
         page.setDefaultNavigationTimeout(DEFAULT_TIMEOUT);
 
-        // User-Agent 설정
+        // User-Agent 설정 (랜덤 생성)
+        const { generateRandomUserAgent } = await import("@/const");
+        const randomUserAgent = generateRandomUserAgent();
+        await logger.info(`🔀 생성된 User-Agent: ${randomUserAgent}`);
         await page.setExtraHTTPHeaders({
-            "User-Agent":
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": randomUserAgent,
         });
 
         // headless 모드에서는 뷰포트 크기 설정
@@ -94,15 +96,63 @@ export default async function handler(
 
         // 페이지 로드 및 대기
         await logger.info(`페이지 로딩 시작: ${url}`);
-        await page.goto(url, {
-            waitUntil: headless ? "networkidle" : "domcontentloaded",
-            timeout: DEFAULT_TIMEOUT,
-        });
-        await logger.success(`페이지 로딩 완료: ${url}`);
+        try {
+            await page.goto(url, {
+                waitUntil: headless ? "networkidle" : "domcontentloaded",
+                timeout: DEFAULT_TIMEOUT,
+            });
+            await logger.success(`페이지 로딩 완료: ${url}`);
 
-        // 페이지 제목을 로그에 출력
-        const title = await page.title();
-        await logger.success(`페이지 로드 완료: ${title}`);
+            // 페이지 제목을 로그에 출력
+            try {
+                const title = await page.title();
+                await logger.success(`페이지 로드 완료: ${title}`);
+            } catch (titleError) {
+                await logger.info(
+                    `페이지 제목을 가져올 수 없습니다: ${titleError}`
+                );
+            }
+        } catch (gotoError) {
+            // 타임아웃 또는 네비게이션 에러 처리
+            const errorMessage =
+                gotoError instanceof Error
+                    ? gotoError.message
+                    : String(gotoError);
+            await logger.error(`페이지 로딩 실패: ${errorMessage}`);
+
+            // 브라우저 정리
+            if (browser) {
+                try {
+                    await browser.close();
+                    await logger.info(
+                        "타임아웃으로 인해 브라우저를 닫았습니다"
+                    );
+                } catch (closeError) {
+                    await logger.error(`브라우저 닫기 오류: ${closeError}`);
+                }
+            }
+
+            // 타임아웃 에러인 경우 명확한 메시지 반환
+            if (
+                errorMessage.includes("Timeout") ||
+                errorMessage.includes("timeout")
+            ) {
+                return res.status(500).json({
+                    success: false,
+                    status: "failed",
+                    error: "페이지 로딩 타임아웃",
+                    details: `페이지 로딩 시간(${DEFAULT_TIMEOUT}ms)을 초과했습니다. 네트워크 상태를 확인하거나 URL을 다시 확인해주세요.`,
+                });
+            }
+
+            // 기타 네비게이션 에러
+            return res.status(500).json({
+                success: false,
+                status: "failed",
+                error: "페이지 로딩 실패",
+                details: errorMessage,
+            });
+        }
 
         // 로그인 정보가 제공된 경우 자동 로그인 시도 (서로이웃 추가 모드가 아닐 때만)
         if (username && password && !friendRequest) {

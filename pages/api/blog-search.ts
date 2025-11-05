@@ -13,6 +13,7 @@ import {
     NAVER_BLOG_SEARCH_URL,
     PAGE_LOAD_TIMEOUT,
     PAGE_NAVIGATION_DELAY,
+    generateRandomUserAgent,
 } from "@/const";
 
 interface BlogSearchResult {
@@ -147,9 +148,11 @@ export default async function handler(
             headless: true,
         });
 
+        // User-Agent 랜덤 생성 (자동로그인 방지 우회)
+        const randomUserAgent = generateRandomUserAgent();
+        await logger.info(`🔀 생성된 User-Agent: ${randomUserAgent}`);
         const context = await browser.newContext({
-            userAgent:
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            userAgent: randomUserAgent,
         });
 
         try {

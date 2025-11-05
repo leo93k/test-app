@@ -10,6 +10,7 @@ import {
     PAGE_LOAD_TIMEOUT,
     ACTION_DELAY,
     PAGE_NAVIGATION_DELAY,
+    generateRandomUserAgent,
 } from "@/const";
 
 type NextApiResponseWithSocket = NextApiResponse & {
@@ -103,26 +104,108 @@ export default async function handler(
                 headless ? "백그라운드" : "화면 표시"
             } 모드)`
         );
+
+        // AWS 환경에서 봇 탐지 우회를 위한 추가 Chrome 인자
+        const chromeArgs = [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled", // WebDriver 탐지 우회
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--disable-gpu",
+            "--disable-web-security",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-site-isolation-trials",
+            "--disable-extensions",
+            "--disable-plugins",
+            "--disable-javascript-harmony-shipping",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-background-networking",
+            "--force-color-profile=srgb",
+            "--metrics-recording-only",
+            "--mute-audio",
+            "--no-default-browser-check",
+            "--enable-automation=false", // 자동화 모드 비활성화
+            "--password-store=basic",
+            "--use-mock-keychain",
+            ...(headless ? [] : ["--start-maximized"]),
+        ];
+
         browser = await chromium.launch({
             headless: headless,
             slowMo: headless ? 0 : 1000,
-            args: [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                ...(headless ? [] : ["--start-maximized"]),
-            ],
+            args: chromeArgs,
         });
         await logger.success(
             `브라우저 실행 완료 (${headless ? "백그라운드" : "화면 표시"} 모드)`
         );
 
-        // 컨텍스트 생성 및 타임아웃, User-Agent 설정
+        // 컨텍스트 생성 및 타임아웃, User-Agent 설정 (랜덤 생성)
+        const randomUserAgent = generateRandomUserAgent();
+        await logger.info(`🔀 생성된 User-Agent: ${randomUserAgent}`);
+
+        // 봇 탐지 우회를 위한 추가 설정
         const context = await browser.newContext({
-            userAgent:
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            userAgent: randomUserAgent,
+            viewport: { width: 1920, height: 1080 }, // 표준 뷰포트 크기
+            locale: "ko-KR", // 한국어 로케일
+            timezoneId: "Asia/Seoul", // 한국 시간대
+            permissions: ["geolocation"], // 위치 권한
+            extraHTTPHeaders: {
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                Connection: "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Cache-Control": "max-age=0",
+            },
         });
+
         context.setDefaultTimeout(PAGE_LOAD_TIMEOUT);
         context.setDefaultNavigationTimeout(PAGE_LOAD_TIMEOUT);
+
+        // WebDriver 탐지 우회를 위한 JavaScript 추가
+        await context.addInitScript(() => {
+            // navigator.webdriver 제거
+            Object.defineProperty(navigator, "webdriver", {
+                get: () => false,
+            });
+
+            // Chrome 객체 추가
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (window as any).chrome = {
+                runtime: {},
+            };
+
+            // permissions API 모킹
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const originalQuery = (window.navigator as any).permissions.query;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (window.navigator as any).permissions.query = (parameters: {
+                name: string;
+            }) =>
+                parameters.name === "notifications"
+                    ? Promise.resolve({ state: Notification.permission })
+                    : originalQuery(parameters);
+
+            // plugins 배열 추가
+            Object.defineProperty(navigator, "plugins", {
+                get: () => [1, 2, 3, 4, 5],
+            });
+
+            // languages 배열 설정
+            Object.defineProperty(navigator, "languages", {
+                get: () => ["ko-KR", "ko", "en-US", "en"],
+            });
+        });
 
         // 새 탭 열기
         const page = await context.newPage();
