@@ -449,12 +449,25 @@ export async function checkIfAlreadyProcessing(
                     (pageText.includes("이미") ||
                         pageText.includes("추가중") ||
                         pageText.includes("진행중") ||
-                        pageText.includes("처리중"))
+                        pageText.includes("처리중") ||
+                        pageText.includes("현재 이웃입니다") ||
+                        pageText.includes("현재 이웃"))
                 ) {
-                    isAlreadyProcessing = true;
-                    await logger.success(
-                        "✅ 이미 추가 중입니다. 서로이웃 추가 프로세스를 종료합니다."
-                    );
+                    // "현재 이웃입니다"인 경우 이미 이웃 상태로 처리
+                    if (
+                        pageText.includes("현재 이웃입니다") ||
+                        pageText.includes("현재 이웃")
+                    ) {
+                        isAlreadyProcessing = true;
+                        await logger.success(
+                            "✅ 이미 이웃 상태입니다. 서로이웃 추가 프로세스를 종료합니다."
+                        );
+                    } else {
+                        isAlreadyProcessing = true;
+                        await logger.success(
+                            "✅ 이미 추가 중입니다. 서로이웃 추가 프로세스를 종료합니다."
+                        );
+                    }
                 }
             } catch {
                 // 페이지 접근 불가 (닫혔을 수 있음)
@@ -657,13 +670,43 @@ export async function executeFriendRequestProcess(
             `📋 팝업 내용 확인: ${popupContent.substring(0, 200)}...`
         );
 
+        // 정상적인 이웃추가 팝업인지 확인
+        const isNormalPopup =
+            popupContent.includes("이웃추가") ||
+            popupContent.includes("서로이웃") ||
+            popupContent.includes("이웃으로 추가") ||
+            popupContent.includes("이웃 신청");
+
+        // 네이버 메인 페이지나 다른 페이지로 이동한 경우 감지
+        const isWrongPage =
+            popupContent.includes("본문 바로가기") ||
+            popupContent.includes("NAVER") ||
+            popupContent.includes("한국어 English") ||
+            (popupContent.length > 0 && !isNormalPopup);
+
+        if (isWrongPage) {
+            const popupUrl = popupPage.url();
+            await logger.error(
+                `❌ 잘못된 팝업이 열렸습니다. 이웃추가 팝업이 아닙니다.`
+            );
+            await logger.error(`팝업 URL: ${popupUrl}`);
+            await logger.error(
+                `팝업 내용 샘플: ${popupContent.substring(0, 300)}...`
+            );
+            throw new Error(
+                `잘못된 팝업이 열렸습니다. 이웃추가 팝업이 아닙니다. 팝업 URL: ${popupUrl}`
+            );
+        }
+
         // "이미 이웃입니다" 관련 메시지 확인
         if (
             popupContent.includes("이미 이웃입니다") ||
             popupContent.includes("이미 이웃") ||
             popupContent.includes("이미 서로이웃") ||
             popupContent.includes("이미 서로이웃입니다") ||
-            popupContent.includes("이웃 상태입니다")
+            popupContent.includes("이웃 상태입니다") ||
+            popupContent.includes("현재 이웃입니다") ||
+            popupContent.includes("현재 이웃")
         ) {
             await logger.info("ℹ️ 팝업에서 '이미 이웃입니다' 메시지 발견");
             await logger.success(
@@ -671,7 +714,18 @@ export async function executeFriendRequestProcess(
             );
             return "already-friend";
         }
-    } catch {
+
+        // 정상적인 팝업인지 최종 확인
+        if (!isNormalPopup) {
+            await logger.info(
+                "⚠️ 팝업 내용이 정상적인 이웃추가 팝업과 다를 수 있습니다. 계속 진행합니다."
+            );
+        }
+    } catch (error) {
+        // 특정 에러 메시지인 경우 재throw
+        if (error instanceof Error && error.message.includes("잘못된 팝업")) {
+            throw error;
+        }
         // 팝업 내용 확인 실패는 무시하고 계속 진행
         await logger.info("ℹ️ 팝업 내용 확인 중 오류 발생, 계속 진행합니다.");
     }
@@ -690,12 +744,24 @@ export async function executeFriendRequestProcess(
         return "already-requesting";
     }
 
-    // 에러 메시지 확인: "서로이웃 신청을 받지 않는 이웃입니다" (라디오 버튼 클릭 후)
+    // 에러 메시지 확인: "서로이웃 신청을 받지 않는 이웃입니다" 또는 "현재 이웃입니다" (라디오 버튼 클릭 후)
     try {
         const errorMessage = await popupPage.evaluate(() => {
             const bodyText = document.body?.textContent || "";
             return bodyText;
         });
+
+        // "현재 이웃입니다" 메시지 확인 (이미 이웃 상태)
+        if (
+            errorMessage.includes("현재 이웃입니다") ||
+            errorMessage.includes("현재 이웃")
+        ) {
+            await logger.info("ℹ️ '현재 이웃입니다' 메시지 발견");
+            await logger.success(
+                "✅ 이미 이웃 상태입니다. 서로이웃 추가 프로세스를 종료합니다."
+            );
+            return "already-friend";
+        }
 
         if (
             errorMessage.includes("서로이웃 신청을 받지 않는") ||
@@ -720,12 +786,53 @@ export async function executeFriendRequestProcess(
     // 다음 버튼 클릭
     await clickNextButton(popupPage, logger);
 
-    // 에러 메시지 확인: "서로이웃 신청을 받지 않는 이웃입니다"
+    // 다음 버튼 클릭 후 팝업이 즉시 닫혔는지 확인 (서버 환경 대응)
+    try {
+        await popupPage.waitForTimeout(500); // 팝업 닫힘 감지 대기
+    } catch {
+        // waitForTimeout 실패 시 팝업이 닫혔을 가능성이 높음
+    }
+
+    // 팝업이 닫혔는지 즉시 확인
+    let popupClosed = false;
+    try {
+        const context = popupPage.context();
+        const pages = context.pages();
+        const popupStillOpen = pages.includes(popupPage);
+        if (!popupStillOpen) {
+            popupClosed = true;
+            await logger.success(
+                "✅ 이미 추가 중입니다. 서로이웃 추가 프로세스를 종료합니다. (팝업 닫힘 - 다음 버튼 클릭 후)"
+            );
+            return "already-requesting";
+        }
+    } catch {
+        // 컨텍스트 접근 불가시 팝업이 닫힌 것으로 간주
+        popupClosed = true;
+        await logger.success(
+            "✅ 이미 추가 중입니다. 서로이웃 추가 프로세스를 종료합니다. (팝업 닫힘 - 다음 버튼 클릭 후)"
+        );
+        return "already-requesting";
+    }
+
+    // 에러 메시지 확인: "서로이웃 신청을 받지 않는 이웃입니다" 또는 "현재 이웃입니다"
     try {
         const errorMessage = await popupPage.evaluate(() => {
             const bodyText = document.body?.textContent || "";
             return bodyText;
         });
+
+        // "현재 이웃입니다" 메시지 확인 (이미 이웃 상태)
+        if (
+            errorMessage.includes("현재 이웃입니다") ||
+            errorMessage.includes("현재 이웃")
+        ) {
+            await logger.info("ℹ️ '현재 이웃입니다' 메시지 발견");
+            await logger.success(
+                "✅ 이미 이웃 상태입니다. 서로이웃 추가 프로세스를 종료합니다."
+            );
+            return "already-friend";
+        }
 
         if (
             errorMessage.includes("서로이웃 신청을 받지 않는") ||
@@ -747,13 +854,15 @@ export async function executeFriendRequestProcess(
         await logger.info("ℹ️ 에러 메시지 확인 중 오류 발생, 계속 진행합니다.");
     }
 
-    // 이미 추가 중인지 확인
-    const isAlreadyProcessing = await checkIfAlreadyProcessing(
-        popupPage,
-        logger
-    );
-    if (isAlreadyProcessing) {
-        return "already-requesting"; // 이미 추가 중이므로 종료
+    // 이미 추가 중인지 확인 (팝업이 아직 열려있는 경우)
+    if (!popupClosed) {
+        const isAlreadyProcessing = await checkIfAlreadyProcessing(
+            popupPage,
+            logger
+        );
+        if (isAlreadyProcessing) {
+            return "already-requesting"; // 이미 추가 중이므로 종료
+        }
     }
 
     // 정상적인 경우 메시지 입력을 위해 대기
