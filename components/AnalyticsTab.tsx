@@ -28,7 +28,7 @@ function AnalyticsContent() {
     // 큐 상태 폴링 함수
     const pollQueueStatus = useCallback(async () => {
         try {
-            const status = browserQueue.getQueueStatus();
+            const status = await browserQueue.getQueueStatus();
             setQueueStatus({
                 ...status,
                 maxConcurrent: maxConcurrent,

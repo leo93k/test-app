@@ -1,5 +1,5 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
-import { MAX_LOGS } from "../../service/logger";
+import { MAX_LOGS } from "@/const/logs";
 
 // LogEntry 인터페이스 및 logsSlice
 export interface LogEntry {

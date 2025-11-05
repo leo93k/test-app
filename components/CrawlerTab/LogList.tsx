@@ -1,7 +1,7 @@
 "use client";
 import { useAppSelector, useAppDispatch } from "@/lib/hooks";
 import { clearLogs } from "@/lib/store/logsSlice";
-import { MAX_LOGS } from "@/service/logger";
+import { MAX_LOGS } from "@/const/logs";
 import dayjs from "dayjs";
 import "dayjs/locale/ko";
 

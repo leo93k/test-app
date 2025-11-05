@@ -2,9 +2,6 @@ import { store } from "../lib/store";
 import { addLog } from "../lib/store/logsSlice";
 import { SOCKET_EVENTS } from "@/const/socketEvents";
 
-// 최대 로그 개수 상수
-export const MAX_LOGS = 100;
-
 // Logger 클래스
 export class Logger {
     // sessionId별 Logger 인스턴스 관리 (Map 방식으로 변경)

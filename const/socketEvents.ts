@@ -9,6 +9,8 @@ export const SOCKET_EVENTS = {
     JOIN_SESSION: "join-session",
     // 서버 → 클라이언트: 로그 전송
     LOG: "log",
+    // 서버 → 클라이언트: 큐 작업 결과 전송
+    QUEUE_RESULT: "queue-result",
 } as const;
 
 // Socket.io 기본 이벤트 (참고용)
