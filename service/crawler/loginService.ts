@@ -11,7 +11,7 @@ import {
     loginErrorSelectors,
 } from "@/const";
 import { Logger } from "@/service/logger";
-import { findElement } from "./utils/crawlService";
+import { createCrawlService } from "./utils/crawlService";
 
 export interface LoginCredentials {
     username: string;
@@ -27,10 +27,12 @@ export interface LoginResult {
 class LoginService {
     private page: Page;
     private logger: Logger;
+    private crawlService: ReturnType<typeof createCrawlService>;
 
     constructor(page: Page, logger: Logger) {
         this.page = page;
         this.logger = logger;
+        this.crawlService = createCrawlService(logger);
     }
 
     async execute(credentials: LoginCredentials): Promise<LoginResult> {
@@ -81,17 +83,21 @@ class LoginService {
     }
 
     private async findUsernameField() {
-        return await findElement(this.page, idSelectors, this.logger, {
+        return await this.crawlService.findElement(this.page, idSelectors, {
             contextName: "아이디 입력 필드",
             useWaitForSelector: false,
         });
     }
 
     private async findPasswordField() {
-        return await findElement(this.page, passwordSelectors, this.logger, {
-            contextName: "비밀번호 입력 필드",
-            useWaitForSelector: false,
-        });
+        return await this.crawlService.findElement(
+            this.page,
+            passwordSelectors,
+            {
+                contextName: "비밀번호 입력 필드",
+                useWaitForSelector: false,
+            }
+        );
     }
 
     private async fillLoginFields(
@@ -173,7 +179,7 @@ class LoginService {
             ...loginButtonSelectors,
         ];
 
-        return await findElement(this.page, selectorsToTry, this.logger, {
+        return await this.crawlService.findElement(this.page, selectorsToTry, {
             contextName: "로그인 버튼",
             useWaitForSelector: false,
         });

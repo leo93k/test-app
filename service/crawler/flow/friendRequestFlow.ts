@@ -8,7 +8,7 @@ import {
     finalNextButtonSelectors,
 } from "@/const/selectors";
 import { SELECTOR_WAIT_TIMEOUT } from "@/const";
-import { findAndClick, findAndFill } from "../utils/crawlService";
+import { createCrawlService } from "../utils/crawlService";
 
 /**
  * 서로이웃 추가 버튼 찾기 및 클릭
@@ -212,11 +212,12 @@ export async function clickNextButton(
     buttonName: string = "다음"
 ): Promise<boolean> {
     await logger.info(`🔘 ${buttonName} 버튼 찾는 중...`);
+    const crawlService = createCrawlService(logger);
 
     let clicked = false;
 
     // 메인 페이지에서 찾기
-    clicked = await findAndClick(popupPage, nextButtonSelectors, logger, {
+    clicked = await crawlService.findAndClick(popupPage, nextButtonSelectors, {
         contextName: `${buttonName} 버튼`,
         useWaitForSelector: false,
     });
@@ -226,10 +227,14 @@ export async function clickNextButton(
         const frames = popupPage.frames();
         for (let i = 0; i < frames.length; i++) {
             const frame = frames[i];
-            clicked = await findAndClick(frame, nextButtonSelectors, logger, {
-                contextName: `iframe ${i + 1}의 ${buttonName} 버튼`,
-                useWaitForSelector: false,
-            });
+            clicked = await crawlService.findAndClick(
+                frame,
+                nextButtonSelectors,
+                {
+                    contextName: `iframe ${i + 1}의 ${buttonName} 버튼`,
+                    useWaitForSelector: false,
+                }
+            );
             if (clicked) break;
         }
     }
@@ -250,15 +255,15 @@ export async function fillMessage(
     message: string
 ): Promise<boolean> {
     await logger.info("📝 서로이웃 추가 메시지 입력 중...");
+    const crawlService = createCrawlService(logger);
 
     let messageInputted = false;
 
     // 메인 페이지에서 찾기
-    messageInputted = await findAndFill(
+    messageInputted = await crawlService.findAndFill(
         popupPage,
         messageSelectors,
         message,
-        logger,
         {
             contextName: "메시지 입력 필드",
             useWaitForSelector: true,
@@ -271,11 +276,10 @@ export async function fillMessage(
         const frames = popupPage.frames();
         for (let i = 0; i < frames.length; i++) {
             const frame = frames[i];
-            messageInputted = await findAndFill(
+            messageInputted = await crawlService.findAndFill(
                 frame,
                 messageSelectors,
                 message,
-                logger,
                 {
                     contextName: `iframe ${i + 1}의 메시지 입력 필드`,
                     useWaitForSelector: true,
@@ -503,14 +507,14 @@ export async function clickFinalNextButton(
     logger: Logger
 ): Promise<boolean> {
     await logger.info("🔘 마지막 다음 버튼 찾는 중 (프로세스 완료)...");
+    const crawlService = createCrawlService(logger);
 
     let finalNextClicked = false;
 
     // 메인 페이지에서 찾기
-    finalNextClicked = await findAndClick(
+    finalNextClicked = await crawlService.findAndClick(
         popupPage,
         finalNextButtonSelectors,
-        logger,
         {
             contextName: "최종 다음 버튼",
             useWaitForSelector: true,
@@ -524,10 +528,9 @@ export async function clickFinalNextButton(
         const frames = popupPage.frames();
         for (let i = 0; i < frames.length; i++) {
             const frame = frames[i];
-            finalNextClicked = await findAndClick(
+            finalNextClicked = await crawlService.findAndClick(
                 frame,
                 finalNextButtonSelectors,
-                logger,
                 {
                     contextName: `iframe ${i + 1}의 최종 다음 버튼`,
                     useWaitForSelector: true,

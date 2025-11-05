@@ -11,8 +11,7 @@ import {
     DEFAULT_TIMEOUT,
     PAGE_NAVIGATION_DELAY,
 } from "@/const";
-import { findAndClick, findAndFill, waitWithLog } from "../utils/crawlService";
-import { navigate } from "../utils";
+import { createCrawlService } from "../utils/crawlService";
 
 /**
  * iframe 또는 메인 페이지에서 로그인 버튼 찾기 및 클릭
@@ -22,6 +21,7 @@ export async function clickLoginButton(
     logger: Logger
 ): Promise<boolean> {
     await logger.info("🔍 로그인 버튼 검색 중...");
+    const crawlService = createCrawlService(logger);
     let loginButtonClicked = false;
 
     try {
@@ -33,10 +33,9 @@ export async function clickLoginButton(
             const frame = frames[i];
             await logger.info(`🔍 iframe ${i + 1}에서 검색 중...`);
 
-            loginButtonClicked = await findAndClick(
+            loginButtonClicked = await crawlService.findAndClick(
                 frame,
                 loginButtonSelectors,
-                logger,
                 {
                     contextName: `iframe ${i + 1}의 로그인 버튼`,
                     useWaitForSelector: false,
@@ -48,10 +47,9 @@ export async function clickLoginButton(
 
         // iframe에서 못 찾으면 메인 페이지에서 찾기
         if (!loginButtonClicked) {
-            loginButtonClicked = await findAndClick(
+            loginButtonClicked = await crawlService.findAndClick(
                 page,
                 loginButtonSelectors,
-                logger,
                 {
                     contextName: "로그인 버튼",
                     useWaitForSelector: false,
@@ -75,21 +73,26 @@ export async function fillAndSubmitLoginForm(
     password: string
 ): Promise<void> {
     await logger.info("📝 로그인 폼에 정보 입력 중...");
+    const crawlService = createCrawlService(logger);
 
     // 아이디 입력
     // headless 모드에서 요소가 로드될 때까지 대기
-    await waitWithLog(
+    await crawlService.waitWithLog(
         page,
-        logger,
         "⏳ 로그인 폼이 로드될 때까지 대기 중...",
         500
     );
 
-    const idInputted = await findAndFill(page, idSelectors, username, logger, {
-        contextName: "아이디 입력 필드",
-        useWaitForSelector: true,
-        waitTimeout: SELECTOR_WAIT_TIMEOUT,
-    });
+    const idInputted = await crawlService.findAndFill(
+        page,
+        idSelectors,
+        username,
+        {
+            contextName: "아이디 입력 필드",
+            useWaitForSelector: true,
+            waitTimeout: SELECTOR_WAIT_TIMEOUT,
+        }
+    );
 
     if (!idInputted) {
         const currentUrl = page.url();
@@ -108,11 +111,16 @@ export async function fillAndSubmitLoginForm(
     // 아이디 입력 후 비밀번호 필드가 로드될 때까지 짧은 대기
     await page.waitForTimeout(200);
 
-    const pwInputted = await findAndFill(page, pwSelectors, password, logger, {
-        contextName: "비밀번호 입력 필드",
-        useWaitForSelector: true,
-        waitTimeout: SELECTOR_WAIT_TIMEOUT,
-    });
+    const pwInputted = await crawlService.findAndFill(
+        page,
+        pwSelectors,
+        password,
+        {
+            contextName: "비밀번호 입력 필드",
+            useWaitForSelector: true,
+            waitTimeout: SELECTOR_WAIT_TIMEOUT,
+        }
+    );
 
     if (!pwInputted) {
         const currentUrl = page.url();
@@ -133,10 +141,9 @@ export async function fillAndSubmitLoginForm(
     // 비밀번호 입력 후 제출 버튼이 로드될 때까지 짧은 대기
     await page.waitForTimeout(200);
 
-    const loginSubmitted = await findAndClick(
+    const loginSubmitted = await crawlService.findAndClick(
         page,
         loginSubmitSelectors,
-        logger,
         {
             contextName: "로그인 제출 버튼",
             useWaitForSelector: true,
@@ -160,9 +167,8 @@ export async function fillAndSubmitLoginForm(
     }
 
     // 로그인 완료 대기
-    await waitWithLog(
+    await crawlService.waitWithLog(
         page,
-        logger,
         "⏳ 로그인 완료 대기 중...",
         PAGE_NAVIGATION_DELAY
     );
@@ -264,7 +270,8 @@ export async function navigateBackToBlog(
             const blogId = blogIdMatch[1];
             const blogUrl = `https://blog.naver.com/${blogId}`;
 
-            await navigate(page, blogUrl, logger, {
+            const crawlService = createCrawlService(logger);
+            await crawlService.navigate(page, blogUrl, {
                 contextName: "원래 블로그 페이지",
                 timeout: DEFAULT_TIMEOUT,
                 retry: false,

@@ -16,7 +16,7 @@ import type {
     BlogSearchEvaluateResult,
     BlogSearchDebugInfo,
 } from "../blogSearchService/blogSearchServiceType";
-import { navigateWithRetry } from "../utils/navigationUtils";
+import { createCrawlService } from "../utils/crawlService";
 
 /**
  * 블로그 검색 URL 생성
@@ -41,7 +41,8 @@ export async function navigateToBlogSearchPage(
     pageNo: number,
     logger: Logger
 ): Promise<void> {
-    await navigateWithRetry(page, url, logger, {
+    const crawlService = createCrawlService(logger);
+    await crawlService.navigateWithRetry(page, url, {
         contextName: `페이지 ${pageNo}`,
         timeout: PAGE_LOAD_TIMEOUT,
         retry: true,

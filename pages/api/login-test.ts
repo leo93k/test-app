@@ -4,7 +4,8 @@ import { chromium } from "playwright";
 import { createLoginService } from "@/service/crawler/loginService";
 import { Logger } from "@/service/logger";
 import { initializeSocketServer } from "@/service/socket";
-import { loginButtonSelectors } from "@/const/selectors";
+import { validateRequest, sendValidationError } from "@/lib/utils/validation";
+import { createCrawlService } from "@/service/crawler/utils/crawlService";
 import {
     DEFAULT_TIMEOUT,
     PAGE_LOAD_TIMEOUT,
@@ -17,8 +18,7 @@ import {
     getChromeArgs,
     getBotDetectionBypassScript,
 } from "@/service/crawler/utils/browserUtils";
-import { findAndClick } from "@/service/crawler/utils/crawlService";
-import { navigate } from "@/service/crawler/utils/navigationUtils";
+import { clickLoginButton } from "@/service/crawler/flow";
 
 type NextApiResponseWithSocket = NextApiResponse & {
     socket: {
@@ -51,21 +51,9 @@ export default async function handler(
         const { url, username, password, headless = false } = req.body;
 
         // 필수 파라미터 검증
-        if (!url) {
-            return res.status(400).json({ error: "URL is required" });
-        }
-
-        if (!username || !password) {
-            return res
-                .status(400)
-                .json({ error: "Username and password are required" });
-        }
-
-        // URL 유효성 검사
-        try {
-            new URL(url);
-        } catch {
-            return res.status(400).json({ error: "Invalid URL format" });
+        const validation = validateRequest(url, username, password);
+        if (!validation.isValid) {
+            return sendValidationError(res, validation.error!);
         }
 
         await logger.info(`🔐 로그인 테스트 시작: ${url}`);
@@ -120,12 +108,13 @@ export default async function handler(
         // WebDriver 탐지 우회를 위한 JavaScript 추가
         await context.addInitScript(getBotDetectionBypassScript());
 
-        // 새 탭 열기
+        // 새 페이지 생성
         const page = await context.newPage();
 
         // 페이지 로드 및 대기
-        await navigate(page, url, logger, {
-            contextName: "페이지",
+        const crawlService = createCrawlService(logger);
+        await crawlService.navigateToPage(page, url, {
+            headless,
             timeout: DEFAULT_TIMEOUT,
             retry: false,
         });
@@ -135,53 +124,7 @@ export default async function handler(
         await logger.info(`원래 페이지 URL 저장: ${originalUrl}`);
 
         // 로그인 버튼 찾기 및 클릭 (블로그 페이지에서 로그인 페이지로 이동)
-        await logger.info("🔍 로그인 버튼 검색 중...");
-
-        // 페이지 로드 완료 후 약간의 대기 시간 (동적 콘텐츠 렌더링 대기)
-        await page.waitForTimeout(ACTION_DELAY);
-
-        let loginButtonClicked = false;
-
-        try {
-            // 먼저 iframe에서 찾기 (순차 처리)
-            const frames = page.frames();
-            await logger.info(`📋 발견된 iframe 개수: ${frames.length}`);
-
-            // iframe을 순차적으로 검색 (먼저 찾으면 중단)
-            for (let index = 0; index < frames.length; index++) {
-                const frame = frames[index];
-                await logger.info(`🔍 iframe ${index + 1}에서 검색 중...`);
-                loginButtonClicked = await findAndClick(
-                    frame,
-                    loginButtonSelectors,
-                    logger,
-                    {
-                        contextName: `iframe ${index + 1}의 로그인 버튼`,
-                        useWaitForSelector: false,
-                    }
-                );
-
-                // 버튼을 찾았으면 루프 종료
-                if (loginButtonClicked) {
-                    break;
-                }
-            }
-
-            // iframe에서 못 찾으면 메인 페이지에서 찾기
-            if (!loginButtonClicked) {
-                loginButtonClicked = await findAndClick(
-                    page,
-                    loginButtonSelectors,
-                    logger,
-                    {
-                        contextName: "메인 페이지의 로그인 버튼",
-                        useWaitForSelector: false,
-                    }
-                );
-            }
-        } catch (iframeError) {
-            await logger.error(`❌ 로그인 버튼 검색 실패: ${iframeError}`);
-        }
+        const loginButtonClicked = await clickLoginButton(page, logger);
 
         if (!loginButtonClicked) {
             throw new Error("로그인 버튼을 찾을 수 없습니다.");
