@@ -169,9 +169,20 @@ jobs:
                   echo "🛑 Stopping existing containers..."
                   $COMPOSE_CMD down --remove-orphans || true
 
-                  # 기존 이미지 제거
+                  # 기존 이미지 제거 (태그된 이미지 포함)
                   echo "🧹 Removing old images..."
+                  # 현재 이미지 이름으로 태그된 기존 이미지 제거
+                  if $DOCKER_CMD images --format '{{.Repository}}:{{.Tag}}' | grep -q "^${CONTAINER_NAME}:"; then
+                      $DOCKER_CMD rmi ${CONTAINER_NAME}:latest || true
+                  fi
+                  # Dangling 이미지 제거 (태그가 없는 이미지)
                   $DOCKER_CMD image prune -f || true
+                  # Build cache 제거 (선택사항 - 빌드 시간이 늘어날 수 있음)
+                  # $DOCKER_CMD builder prune -f || true
+
+                  # 이전 빌드 파일 정리 (.next 캐시 등)
+                  echo "🧹 Cleaning build artifacts..."
+                  rm -rf .next || true
 
                   # Docker 이미지 빌드 및 컨테이너 실행 (docker-compose 사용)
                   echo "🔨 Building and starting containers with docker-compose..."
