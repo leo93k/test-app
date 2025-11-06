@@ -1,0 +1,203 @@
+name: Deploy to EC2
+
+on:
+    push:
+        branches:
+            - main
+    workflow_dispatch:
+
+env:
+    CONTAINER_NAME: crawling-app
+
+jobs:
+    deploy:
+        name: Deploy to EC2
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Configure SSH
+              run: |
+                  mkdir -p ~/.ssh
+                  chmod 700 ~/.ssh
+
+                  # SSH 키 파일 생성
+                  cat > ~/.ssh/deploy_key << 'KEYEOF'
+                  ${{ secrets.EC2_SSH_KEY }}
+                  KEYEOF
+                  chmod 600 ~/.ssh/deploy_key
+
+                  # known_hosts에 EC2 호스트 추가
+                  ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+                  chmod 644 ~/.ssh/known_hosts
+
+            - name: Deploy files to EC2
+              env:
+                  EC2_HOST: ${{ secrets.EC2_HOST }}
+                  EC2_USER: ${{ secrets.EC2_USER }}
+                  DEPLOY_PATH: ${{ secrets.EC2_DEPLOY_PATH || '~/app' }}
+              run: |
+                  # EC2로 파일 전송 (.git, node_modules 제외)
+                  DEPLOY_PATH_RAW="${{ secrets.EC2_DEPLOY_PATH || '~/app' }}"
+
+                  # 경로를 SSH로 확인하고 절대 경로로 변환
+                  ACTUAL_PATH=$(ssh -i ~/.ssh/deploy_key \
+                      -o StrictHostKeyChecking=no \
+                      -o UserKnownHostsFile=~/.ssh/known_hosts \
+                      ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+                      "DEPLOY_PATH_RAW='$DEPLOY_PATH_RAW'
+                      if [[ \"\$DEPLOY_PATH_RAW\" == ~* ]]; then
+                        echo \"\${HOME}\${DEPLOY_PATH_RAW#\~}\"
+                      else
+                        echo \"\$DEPLOY_PATH_RAW\"
+                      fi")
+
+                  # 경로가 비어있거나 루트인 경우 에러
+                  if [ -z "$ACTUAL_PATH" ] || [ "$ACTUAL_PATH" = "/" ]; then
+                      echo "❌ Error: Invalid deployment path: $ACTUAL_PATH"
+                      exit 1
+                  fi
+
+                  echo "📁 Deploying to: $ACTUAL_PATH"
+
+                  # 배포 경로 디렉토리 생성
+                  ssh -i ~/.ssh/deploy_key \
+                      -o StrictHostKeyChecking=no \
+                      -o UserKnownHostsFile=~/.ssh/known_hosts \
+                      ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+                      "mkdir -p '$ACTUAL_PATH'"
+
+                  # rsync로 파일 전송 (--delete는 배포 경로 내에서만 적용)
+                  rsync -avz \
+                    -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=~/.ssh/known_hosts" \
+                    --exclude '.git' \
+                    --exclude 'node_modules' \
+                    --exclude '.next' \
+                    --exclude '.env*' \
+                    --exclude '*.log' \
+                    --exclude '.DS_Store' \
+                    --delete \
+                    ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:$ACTUAL_PATH/
+
+            - name: Build and deploy on EC2
+              env:
+                  EC2_HOST: ${{ secrets.EC2_HOST }}
+                  EC2_USER: ${{ secrets.EC2_USER }}
+                  DEPLOY_PATH: ${{ secrets.EC2_DEPLOY_PATH || '~/app' }}
+              run: |
+                  ssh -i ~/.ssh/deploy_key \
+                      -o StrictHostKeyChecking=no \
+                      -o UserKnownHostsFile=~/.ssh/known_hosts \
+                      -o ConnectTimeout=10 \
+                      ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+                  set -e
+
+                  CONTAINER_NAME="${{ env.CONTAINER_NAME }}"
+                  DEPLOY_PATH_RAW="${{ secrets.EC2_DEPLOY_PATH || '~/app' }}"
+
+                  # 배포 경로 설정 (~를 $HOME으로 확장)
+                  if [[ "$DEPLOY_PATH_RAW" == ~* ]]; then
+                      DEPLOY_PATH="${DEPLOY_PATH_RAW/#\~/$HOME}"
+                  else
+                      DEPLOY_PATH="$DEPLOY_PATH_RAW"
+                  fi
+
+                  echo "📁 Deployment path: $DEPLOY_PATH"
+                  cd "$DEPLOY_PATH" || exit 1
+
+                  # 필수 패키지 설치 확인
+                  if ! command -v rsync &> /dev/null; then
+                      echo "📦 Installing rsync..."
+                      sudo apt-get update
+                      sudo apt-get install -y rsync
+                  fi
+
+                  # Docker 설치 확인
+                  if ! command -v docker &> /dev/null; then
+                      echo "📦 Installing Docker..."
+                      sudo apt-get update
+                      sudo apt-get install -y \
+                          ca-certificates \
+                          curl \
+                          gnupg \
+                          lsb-release
+                      curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+                      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                      sudo apt-get update
+                      sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+                      sudo usermod -aG docker $USER
+                      # Docker 설치 확인
+                      sudo docker --version
+                  fi
+
+                  # Docker 명령어 실행 (sudo 사용 또는 그룹 권한 확인)
+                  if docker ps &> /dev/null; then
+                      echo "✅ Docker is accessible"
+                      DOCKER_CMD="docker"
+                  else
+                      echo "⚠️ Docker requires sudo, using sudo docker"
+                      DOCKER_CMD="sudo docker"
+                  fi
+
+                  echo "✅ Docker version: $($DOCKER_CMD --version)"
+
+                  # docker-compose 설치 확인
+                  if ! command -v docker-compose &> /dev/null; then
+                      echo "📦 Installing docker-compose..."
+                      if [ "$DOCKER_CMD" = "sudo docker" ]; then
+                          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+                          sudo chmod +x /usr/local/bin/docker-compose
+                      else
+                          curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o ~/docker-compose
+                          chmod +x ~/docker-compose
+                          sudo mv ~/docker-compose /usr/local/bin/docker-compose
+                      fi
+                  fi
+
+                  # docker-compose 명령어 설정
+                  if [ "$DOCKER_CMD" = "sudo docker" ]; then
+                      COMPOSE_CMD="sudo docker-compose"
+                  else
+                      COMPOSE_CMD="docker-compose"
+                  fi
+
+                  echo "✅ docker-compose version: $($COMPOSE_CMD --version)"
+
+                  # 기존 컨테이너 중지 및 제거 (docker-compose 사용)
+                  echo "🛑 Stopping existing containers..."
+                  $COMPOSE_CMD down --remove-orphans || true
+
+                  # 기존 이미지 제거
+                  echo "🧹 Removing old images..."
+                  $DOCKER_CMD image prune -f || true
+
+                  # Docker 이미지 빌드 및 컨테이너 실행 (docker-compose 사용)
+                  echo "🔨 Building and starting containers with docker-compose..."
+                  $COMPOSE_CMD up --build -d
+
+                  # 컨테이너 상태 확인
+                  echo "⏳ Waiting for containers to start..."
+                  sleep 5
+
+                  if $COMPOSE_CMD ps | grep -q "Up"; then
+                      echo "✅ Container is running!"
+                      $COMPOSE_CMD ps
+                      echo ""
+                      echo "📋 Container logs (last 20 lines):"
+                      $COMPOSE_CMD logs --tail 20
+                  else
+                      echo "❌ Container failed to start"
+                      $COMPOSE_CMD logs || true
+                      exit 1
+                  fi
+
+                  echo "✅ Deployment completed successfully!"
+                  EOF
+
+            - name: Verify deployment
+              run: |
+                  echo "✅ Deployment completed!"
+                  echo "Container: ${{ env.CONTAINER_NAME }}"
+                  echo "Host: ${{ secrets.EC2_HOST }}"
