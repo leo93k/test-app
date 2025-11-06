@@ -1,4 +1,5 @@
-import jwt, { SignOptions } from "jsonwebtoken";
+import jwt from "jsonwebtoken";
+import type { StringValue } from "ms";
 
 // JWT 시크릿 키 (실제 프로덕션에서는 환경 변수로 관리해야 함)
 const JWT_SECRET: string =
@@ -15,10 +16,9 @@ export interface JWTPayload {
  * JWT 토큰 생성
  */
 export function generateToken(payload: JWTPayload): string {
-    const options: SignOptions = {
-        expiresIn: JWT_EXPIRES_IN,
-    };
-    return jwt.sign(payload, JWT_SECRET, options);
+    return jwt.sign(payload, JWT_SECRET, {
+        expiresIn: JWT_EXPIRES_IN as StringValue | number,
+    });
 }
 
 /**
@@ -28,7 +28,7 @@ export function verifyToken(token: string): JWTPayload | null {
     try {
         const decoded = jwt.verify(token, JWT_SECRET) as JWTPayload;
         return decoded;
-    } catch (error) {
+    } catch {
         return null;
     }
 }
