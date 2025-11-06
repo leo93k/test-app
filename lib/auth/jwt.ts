@@ -1,9 +1,9 @@
-import jwt from "jsonwebtoken";
+import jwt, { SignOptions } from "jsonwebtoken";
 
 // JWT 시크릿 키 (실제 프로덕션에서는 환경 변수로 관리해야 함)
-const JWT_SECRET =
+const JWT_SECRET: string =
     process.env.JWT_SECRET || "your-secret-key-change-in-production";
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d"; // 7일
+const JWT_EXPIRES_IN: string = process.env.JWT_EXPIRES_IN || "7d"; // 7일
 
 export interface JWTPayload {
     userId: string;
@@ -15,9 +15,10 @@ export interface JWTPayload {
  * JWT 토큰 생성
  */
 export function generateToken(payload: JWTPayload): string {
-    return jwt.sign(payload, JWT_SECRET, {
+    const options: SignOptions = {
         expiresIn: JWT_EXPIRES_IN,
-    });
+    };
+    return jwt.sign(payload, JWT_SECRET, options);
 }
 
 /**
