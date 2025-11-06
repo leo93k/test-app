@@ -74,6 +74,8 @@ export default async function handler(
             headless: headless,
             slowMo: headless ? 0 : 1000,
             args: chromeArgs,
+            executablePath:
+                process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
         });
         await logger.success(
             `브라우저 실행 완료 (${headless ? "백그라운드" : "화면 표시"} 모드)`

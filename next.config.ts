@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
     // Next.js 16에서는 turbo가 기본적으로 활성화되어 있습니다
+    output: "standalone",
     compiler: {
         removeConsole:
             process.env.NODE_ENV === "production"

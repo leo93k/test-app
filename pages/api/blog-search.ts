@@ -48,6 +48,8 @@ export default async function handler(
 
         const browser = await chromium.launch({
             headless: true,
+            executablePath:
+                process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
         });
 
         // User-Agent 랜덤 생성 (자동로그인 방지 우회)
