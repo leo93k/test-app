@@ -13,8 +13,8 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 # Copy package files
 COPY package.json yarn.lock ./
 
-# Install dependencies using yarn
-RUN yarn --frozen-lockfile
+# Install dependencies using yarn (skip postinstall to avoid Playwright browser download)
+RUN yarn --frozen-lockfile --ignore-scripts
 
 # Stage 2: Builder
 FROM ${BUILD_IMAGE} AS builder

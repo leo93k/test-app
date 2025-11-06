@@ -165,6 +165,10 @@ jobs:
 
                   echo "✅ docker-compose version: $($COMPOSE_CMD --version)"
 
+                  # 디스크 공간 확인
+                  echo "💾 Checking disk space..."
+                  df -h
+
                   # 기존 컨테이너 중지 및 제거 (docker-compose 사용)
                   echo "🛑 Stopping existing containers..."
                   $COMPOSE_CMD down --remove-orphans || true
@@ -177,8 +181,10 @@ jobs:
                   fi
                   # Dangling 이미지 제거 (태그가 없는 이미지)
                   $DOCKER_CMD image prune -f || true
-                  # Build cache 제거 (선택사항 - 빌드 시간이 늘어날 수 있음)
-                  # $DOCKER_CMD builder prune -f || true
+                  # Build cache 제거 (디스크 공간 확보)
+                  $DOCKER_CMD builder prune -f || true
+                  # 사용하지 않는 모든 리소스 정리 (볼륨, 네트워크 등)
+                  $DOCKER_CMD system prune -f || true
 
                   # 이전 빌드 파일 정리 (.next 캐시 등)
                   echo "🧹 Cleaning build artifacts..."
