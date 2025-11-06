@@ -1,9 +1,12 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/hooks/useAuth";
+import { Button } from "@/components/ui/button";
 
 export default function Navigation() {
     const pathname = usePathname();
+    const { user, logout } = useAuth();
 
     // 개발 환경인지 확인
     const isDev = process.env.NODE_ENV !== "production";
@@ -87,8 +90,23 @@ export default function Navigation() {
                 </ul>
             </nav>
 
-            {/* 하단 정보 */}
-            <div className="absolute bottom-4 left-4 right-4">
+            {/* 하단 정보 및 로그아웃 */}
+            <div className="absolute bottom-4 left-4 right-4 space-y-3">
+                {/* 사용자 정보 */}
+                {user && (
+                    <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 border border-blue-200 dark:border-blue-800">
+                        <div className="text-xs text-blue-700 dark:text-blue-300">
+                            <div className="font-medium mb-1">
+                                👤 {user.name}
+                            </div>
+                            <div className="text-blue-600 dark:text-blue-400">
+                                @{user.username}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 현재 페이지 정보 */}
                 <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
                     <div className="text-xs text-gray-500 dark:text-gray-400">
                         <div>
@@ -99,6 +117,17 @@ export default function Navigation() {
                         <div className="mt-1">상태: 정상</div>
                     </div>
                 </div>
+
+                {/* 로그아웃 버튼 */}
+                {user && (
+                    <Button
+                        onClick={logout}
+                        variant="outline"
+                        className="w-full"
+                    >
+                        🚪 로그아웃
+                    </Button>
+                )}
             </div>
         </div>
     );
